@@ -1,6 +1,6 @@
 module github.com/baahl-nyu/orion
 
-go 1.23.0
+go 1.22
 
 require github.com/baahl-nyu/lattigo/v6 v6.2.0
 
