@@ -1,0 +1,3 @@
+[submodule "orion/backend/heongpu/source"]
+	path = orion/backend/heongpu/source
+	url = https://github.com/AdrianHeath988/adrianHEonGPU.git
