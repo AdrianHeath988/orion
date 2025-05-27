@@ -25,7 +25,16 @@ dependencies = [
 
 [tool.poetry]
 packages = [{include = "orion"}]
+exclude = [
+    "orion/backend/heongpu/**/build/**",
+    "orion/backend/heongpu/**/_deps/**",
+    "orion/backend/heongpu/**/.git/**", 
+    "orion/backend/heongpu/adrianHEonGPU/build/_deps/cccl-src/github/**",
+    "orion/backend/heongpu/adrianHEonGPU/build/**",
+    "orion/backend/heongpu/adrianHEonGPU/_deps/**",
+]
+
 
 [tool.poetry.build]
 generate-setup-file = true
-script = "tools/build_lattigo.py"
+script = "tools/build_backends.py"

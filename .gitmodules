@@ -1,3 +1,6 @@
 [submodule "orion/backend/heongpu/HEonGPU"]
 	path = orion/backend/heongpu/HEonGPU
 	url = git@github.com:Alisah-Ozcan/HEonGPU.git
+[submodule "orion/backend/heongpu/adrianHEonGPU"]
+	path = orion/backend/heongpu/adrianHEonGPU
+	url = git@github.com:AdrianHeath988/adrianHEonGPU.git
