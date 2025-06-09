@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from orion.nn.module import Module
 from orion.nn.linear import LinearTransform
 from orion.backend.lattigo import bindings as lgo
+from orion.backend.heongpu import bindings as hog
 from orion.backend.python import (
     parameters, 
     key_generator,
@@ -92,6 +93,10 @@ class Scheme:
             py_lattigo = lgo.LattigoLibrary()
             py_lattigo.setup_bindings(params)
             return py_lattigo
+        if backend == "heongpu":
+            py_heongpu = hog.HEonGPULibrary()
+            py_heongpu.setup_bindings(params)
+            return py_heongpu
         elif backend in ("heaan", "openfhe"):
             raise ValueError(f"Backend {backend} not yet supported.")
         else:

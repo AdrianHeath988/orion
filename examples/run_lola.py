@@ -13,7 +13,7 @@ from orion.core.utils import (
 torch.manual_seed(42)
 
 # Initialize the Orion scheme, model, and data
-scheme = orion.init_scheme("../configs/lola.yml")
+scheme = orion.init_scheme("../configs/lola2.yml")
 trainloader, testloader = get_mnist_datasets(data_dir="../data", batch_size=1)
 net = models.LoLA()
 
