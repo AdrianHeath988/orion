@@ -5,6 +5,43 @@ import platform
 import torch
 import numpy as np
 
+
+class HE_CKKS_Context(ctypes.Structure): pass
+class HE_CKKS_Plaintext(ctypes.Structure): pass
+class HE_CKKS_Ciphertext(ctypes.Structure): pass
+class HE_CKKS_SecretKey(ctypes.Structure): pass
+class HE_CKKS_PublicKey(ctypes.Structure): pass
+class HE_CKKS_MultipartyPublicKey(ctypes.Structure): pass
+class HE_CKKS_RelinKey(ctypes.Structure): pass
+class HE_CKKS_MultipartyRelinKey(ctypes.Structure): pass
+class HE_CKKS_GaloisKey(ctypes.Structure): pass
+class HE_CKKS_Encoder(ctypes.Structure): pass
+class HE_CKKS_Decryptor(ctypes.Structure): pass
+class HE_CKKS_KeyGenerator(ctypes.Structure): pass
+class HE_CKKS_ArithmeticOperator(ctypes.Structure): pass
+class HE_CKKS_LogicOperator(ctypes.Structure): pass
+
+class ArrayResultInt(ctypes.Structure):
+    _fields_ = [("Data", ctypes.POINTER(ctypes.c_int)), 
+                ("Length", ctypes.c_size_t)]
+
+class ArrayResultFloat(ctypes.Structure):
+    _fields_ = [("Data", ctypes.POINTER(ctypes.c_float)), 
+                ("Length", ctypes.c_size_t)]
+
+class ArrayResultDouble(ctypes.Structure):
+    _fields_ = [("Data", ctypes.POINTER(ctypes.c_double)), 
+                ("Length", ctypes.c_size_t)]
+
+class ArrayResultUInt64(ctypes.Structure):
+    _fields_ = [("Data", ctypes.POINTER(ctypes.c_uint64)), # c_uint64 is an alias for c_ulonglong
+                ("Length", ctypes.c_size_t)]
+
+class ArrayResultByte(ctypes.Structure):
+    _fields_ = [("Data", ctypes.POINTER(ctypes.c_ubyte)), # (unsigned char *)
+                ("Length", ctypes.c_size_t)]
+
+
 class HEonGPUFunction:
     """Helper to wrap ctypes functions with argument and return types."""
     def __init__(self, func, argtypes, restype):
@@ -13,26 +50,39 @@ class HEonGPUFunction:
         self.func.restype = restype
 
     def __call__(self, *args):
-        c_args = []
-        for arg in args:
-            curr_argtype = self.func.argtypes[len(c_args)]
-            c_arg = self.convert_to_ctypes(arg, curr_argtype)
-            if isinstance(c_arg, tuple):
-                c_args.extend(c_arg)
-            else:
-                c_args.append(c_arg)
-                
-        c_result = self.func(*c_args)
-        py_result = self.convert_from_ctypes(c_result)
+        """
+        Handles calling the C function with Python arguments and returning a Python result.
+        """
+        py_args_list = list(args)
+        c_args_list = []
         
-        # If the result is a list, then we'll need to manually free the
-        # memory we allocated for this list in C with the below. We'll
-        # defer freeing byte data (from serialization) until after that
-        # data has been saved to HDF5.
-        if isinstance(py_result, list):
-            HEonGPUFunction.FreeCArray(
-                ctypes.cast(c_result.Data, ctypes.c_void_p))
+        # Use a while loop to manually control indices for both arg lists
+        py_arg_idx = 0
+        c_arg_type_idx = 0
+        
+        if self.func.argtypes:
+            while py_arg_idx < len(py_args_list):
+                current_py_arg = py_args_list[py_arg_idx]
+                current_c_type = self.func.argtypes[c_arg_type_idx]
+                if isinstance(current_py_arg, list) and isinstance(current_c_type, type(ctypes.POINTER(ctypes.c_void_p))):
 
+                    len_c_type = self.func.argtypes[c_arg_type_idx + 1]
+                    if len_c_type is not ctypes.c_size_t:
+                        raise TypeError(f"C function signature is incorrect: Expected c_size_t after pointer for list argument, but got {len_c_type}")
+                    c_arg_tuple = self.convert_to_ctypes(current_py_arg, current_c_type)
+                    c_args_list.extend(c_arg_tuple)
+                    py_arg_idx += 1
+                    c_arg_type_idx += 2
+                else:
+                    c_arg = self.convert_to_ctypes(current_py_arg, current_c_type)
+                    c_args_list.append(c_arg)
+                    
+                    py_arg_idx += 1
+                    c_arg_type_idx += 1
+        
+        c_result = self.func(*c_args_list)
+        py_result = self.convert_from_ctypes(c_result, self.func.restype)
+        
         return py_result
 
     @torch._dynamo.disable
@@ -53,6 +103,12 @@ class HEonGPUFunction:
         elif isinstance(arg, list):
             if typ == ctypes.POINTER(ctypes.c_int):
                 return ((ctypes.c_int * len(arg))(*arg), len(arg))
+            elif typ == ctypes.POINTER(ctypes.c_uint64):
+                return ((ctypes.c_uint64 * len(arg))(*arg), len(arg))
+            elif typ == ctypes.POINTER(ctypes.c_ulong):
+                return ((ctypes.c_ulong * len(arg))(*arg), len(arg))
+            elif typ == ctypes.POINTER(ctypes.c_ubyte):
+                return ((ctypes.c_ubyte * len(arg))(*arg), len(arg))
             elif typ == ctypes.POINTER(ctypes.c_float):
                 return ((ctypes.c_float * len(arg))(*arg), len(arg))
             elif typ == ctypes.POINTER(ctypes.c_ulong):
@@ -64,10 +120,27 @@ class HEonGPUFunction:
         else:
             return arg
             
-    def convert_from_ctypes(self, res):
-        if type(res) == ctypes.c_int:
+    def convert_from_ctypes(self, res, restype):
+        if (hasattr(restype, '_type_') and 
+        isinstance(restype._type_, type) and 
+        issubclass(restype._type_, ctypes.Structure)):
+            if not res:
+                return None
+            if issubclass(restype, ArrayResultFloat):
+                return [float(res.contents.Data[i]) for i in range(res.contents.Length)]
+            elif issubclass(restype, (ArrayResultInt, ArrayResultUInt64)):
+                return [int(res.contents.Data[i]) for i in range(res.contents.Length)]
+            elif issubclass(restype, ArrayResultDouble):
+                return [float(res.contents.Data[i]) for i in range(res.contents.Length)]
+            elif issubclass(restype, ArrayResultByte):
+                buffer = ctypes.cast(res.contents.Data, ctypes.POINTER(ctypes.c_ubyte * res.contents.Length)).contents
+                array = np.frombuffer(buffer, dtype=np.uint8)
+                return array, res.contents.Data 
+            else:
+                return res
+        elif restype in (ctypes.c_int, ctypes.c_long, ctypes.c_longlong, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulonglong, ctypes.c_size_t):
             return int(res)
-        elif type(res) == ctypes.c_float:
+        elif restype in (ctypes.c_float, ctypes.c_double):
             return float(res)
         elif type(res) == ArrayResultFloat:
             return [float(res.Data[i]) for i in range(res.Length)]
@@ -128,8 +201,8 @@ class HEonGPULibrary:
         Declares the functions from the Lattigo shared library and sets their
         argument and return types.
         """
-        # self.setup_scheme(orion_params)
-        # self.setup_tensor_binds()
+        context_handle = self.setup_scheme(orion_params)
+        self.setup_tensor_binds()
         # self.setup_key_generator()
         # self.setup_encoder()
         # self.setup_encryptor()
@@ -137,3 +210,199 @@ class HEonGPULibrary:
         # self.setup_poly_evaluator()
         # self.setup_lt_evaluator()
         # self.setup_bootstrapper()
+
+    def setup_scheme(self, orion_params):
+        """
+        Initializes and configures the HEonGPU scheme by creating and setting up
+        a CKKS context object.
+
+        This function binds to the C API functions defined in context_c_api.h.
+        """
+        self.HEonGPU_CKKS_Context_Create = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_Create,
+            argtypes=[
+                ctypes.c_int,  # C_keyswitching_type enum
+                ctypes.c_int   # C_sec_level_type enum
+            ],
+            # Returns an opaque pointer to the context struct
+            restype=ctypes.POINTER(HE_CKKS_Context) 
+        )
+        
+        self.HEonGPU_CKKS_Context_Delete = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_Delete,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=None
+        )
+        
+        self.HEonGPU_CKKS_Context_SetPolyModulusDegree = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_SetPolyModulusDegree,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context), ctypes.c_size_t],
+            restype=None
+        )
+
+
+
+        self.HEonGPU_CKKS_Context_SetCoeffModulusValues = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_SetCoeffModulusValues,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.POINTER(ctypes.c_uint64), # log_q_bases_data (uint64_t*)
+                ctypes.c_size_t,               # log_q_bases_len
+                ctypes.POINTER(ctypes.c_uint64), # log_p_bases_data (uint64_t*)
+                ctypes.c_size_t                # log_p_bases_len
+            ],
+            restype=ctypes.c_int # Returns 0 on success
+        )
+        
+        self.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.POINTER(ctypes.c_int), 
+                ctypes.c_size_t,              
+                ctypes.POINTER(ctypes.c_int), 
+                ctypes.c_size_t                
+            ],
+            restype=ctypes.c_int 
+        )
+
+        self.HEonGPU_CKKS_Context_Generate = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_Generate,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=ctypes.c_int # Returns 0 on success
+        )
+        
+        self.HEonGPU_FreeSerializedData = HEonGPUFunction(
+            self.lib.HEonGPU_FreeSerializedData,
+            argtypes=[ctypes.c_void_p],
+            restype=None
+        )
+
+        
+        # HEonGPU parameters (using CKKS defaults where applicable)
+        keyswitch_method = 1 
+        sec_level = 128
+        
+        # Lattigo parameters mapped to HEonGPU
+        poly_degree = 1 << orion_params.get_logn() # logn -> n
+        logq = orion_params.get_logq()             # Bit-lengths of Q primes
+        logp = orion_params.get_logp()             # Bit-lengths of P primes
+        # Unable to set scale directly in heongpu context, it's set in the encoder instead by user input
+        scale = 1 << orion_params.get_logscale()   # logscale -> scale
+
+        
+        context_handle = self.HEonGPU_CKKS_Context_Create(keyswitch_method, sec_level)
+        if not context_handle:
+            raise RuntimeError("Failed to create HEonGPU CKKS Context.")
+
+        self.HEonGPU_CKKS_Context_SetPolyModulusDegree(context_handle, poly_degree)
+        result_modulus = self.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes(context_handle, logq, logp[0:1])
+        if result_modulus != 0:
+            self.HEonGPU_CKKS_Context_Delete(context_handle)
+            raise RuntimeError("Failed to set HEonGPU coefficient modulus bit-sizes.")
+
+        result = self.HEonGPU_CKKS_Context_Generate(context_handle)
+        if result != 0:
+            self.HEonGPU_CKKS_Context_Delete(context_handle)
+            raise RuntimeError("Failed to generate HEonGPU context parameters.")
+
+        print("HEonGPU CKKS Context successfully created and configured.")
+
+        # context handle is required for all subsequent operations
+        return context_handle
+
+    def setup_tensor_binds(self):
+        self.DeletePlaintext = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Plaintext_Delete,
+            argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
+            restype=None
+        )
+
+        self.GetPlaintextScale = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Plaintext_GetScale,
+            argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
+            restype=ctypes.c_double
+        )
+
+        self.GetCiphertextScale = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Ciphertext_GetScale,
+            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+            restype=ctypes.c_double
+        )
+
+        # Not A thing
+        # self.SetPlaintextScale = HEonGPUFunction(
+        #     self.lib.HEonGPU_CKKS_Plaintext_SetScale,
+        #     argtypes=[
+        #         ctypes.POINTER(HE_CKKS_Plaintext),
+        #         ctypes.c_double,
+        #     ],
+        #     restype=None
+        # )
+
+        #Not A thing
+        # self.SetCiphertextScale = HEonGPUFunction(
+        #     self.lib.HEonGPU_CKKS_Ciphertext_SetScale,
+        #     argtypes=[
+        #         ctypes.POINTER(HE_CKKS_Ciphertext),
+        #         ctypes.c_double,
+        #     ],
+        #     restype=ctypes.c_double
+        # )
+
+        # "Level" corresponds to the number of remaining prime moduli in the chain.
+        # However, plaintext in HEonGPU stores depth (number of prime moduli consumed).
+        # Need to think on how to resolvbe this.
+        # self.GetPlaintextLevel = HEonGPUFunction(
+        #     self.lib.HEonGPU_CKKS_Plaintext_GetDepth,
+        #     argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
+        #     restype=ctypes.c_int
+        # )
+
+        self.GetCiphertextLevel = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Ciphertext_GetCoeffModulusCount, # Assumes this C API function exists
+            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+            restype=ctypes.c_int
+        )
+
+        # "Slots" corresponds to half the ring size (poly_modulus_degree).
+        self.GetPlaintextSize = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Plaintext_GetPlainSize,
+            argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
+            restype=ctypes.c_int 
+        )
+        def GetPlaintextSlots(self, plaintext_handle):
+            if not plaintext_handle:
+                raise ValueError("Invalid plaintext handle provided.")
+            plain_size = self.GetPlaintextSize(plaintext_handle)
+            return plain_size // 2
+
+
+        self.GetCiphertextSize = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Ciphertext_GetRingSize,
+            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+            restype=ctypes.c_int
+        )
+        def GetCiphertextSlots(self, ciphertext_handle):
+            if not ciphertext_handle:
+                raise ValueError("Invalid ciphertext handle provided.")
+            ring_size = self.GetCiphertextSize(ciphertext_handle)
+            return ring_size // 2
+
+
+        self.GetCiphertextDegree = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Ciphertext_GetCiphertextSize,
+            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+            restype=ctypes.c_int
+        )
+
+        # Not a thing currently (check context_c_api.cu) to implement
+        # self.GetModuliChain = HEonGPUFunction(
+        #     self.lib.HEonGPU_CKKS_Context_GetCoeffModulus,
+        #     argtypes=[
+        #         ctypes.POINTER(HE_CKKS_Context),
+        #         ctypes.POINTER(C_Modulus64),
+        #         ctypes.c_size_t
+        #     ],
+        #     restype=ctypes.c_size_t
+        # )
