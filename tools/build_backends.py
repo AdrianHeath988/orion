@@ -69,6 +69,7 @@ def build_heongpu(root_dir, env):
         "cmake",
         "-S", ".",  # Source directory (current dir when cwd is heongpu_source_dir)
         "-B", heongpu_build_dir_name, # Build directory
+        "-D", "HEonGPU_BUILD_EXAMPLES=ON"
         "-D", "CMAKE_CUDA_ARCHITECTURES=86"
         # Add other -D flags if needed, e.g., CMAKE_BUILD_TYPE
         # Consider adding -D CMAKE_INSTALL_PREFIX=./install_heongpu for local install

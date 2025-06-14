@@ -20,7 +20,13 @@ class HE_CKKS_Decryptor(ctypes.Structure): pass
 class HE_CKKS_KeyGenerator(ctypes.Structure): pass
 class HE_CKKS_ArithmeticOperator(ctypes.Structure): pass
 class HE_CKKS_LogicOperator(ctypes.Structure): pass
-
+C_storage_type = ctypes.c_int
+class C_ExecutionOptions(ctypes.Structure):
+    _fields_ = [
+        ("stream", ctypes.c_void_p),
+        ("storage", C_storage_type),
+        ("keep_initial_condition", ctypes.c_bool)
+    ]
 class ArrayResultInt(ctypes.Structure):
     _fields_ = [("Data", ctypes.POINTER(ctypes.c_int)), 
                 ("Length", ctypes.c_size_t)]
@@ -201,9 +207,9 @@ class HEonGPULibrary:
         Declares the functions from the Lattigo shared library and sets their
         argument and return types.
         """
-        context_handle = self.setup_scheme(orion_params)
+        self.context_handle = self.setup_scheme(orion_params)
         self.setup_tensor_binds()
-        # self.setup_key_generator()
+        self.setup_key_generator()
         # self.setup_encoder()
         # self.setup_encryptor()
         # self.setup_evaluator()
@@ -278,6 +284,12 @@ class HEonGPULibrary:
             restype=None
         )
 
+        self.HEonGPU_PrintParameters = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_PrintParameters,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=None
+        )
+
         
         # HEonGPU parameters (using CKKS defaults where applicable)
         keyswitch_method = 1 
@@ -285,6 +297,8 @@ class HEonGPULibrary:
         
         # Lattigo parameters mapped to HEonGPU
         poly_degree = 1 << orion_params.get_logn() # logn -> n
+        poly_degree = 8192
+        print(poly_degree)
         logq = orion_params.get_logq()             # Bit-lengths of Q primes
         logp = orion_params.get_logp()             # Bit-lengths of P primes
         # Unable to set scale directly in heongpu context, it's set in the encoder instead by user input
@@ -301,10 +315,12 @@ class HEonGPULibrary:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
             raise RuntimeError("Failed to set HEonGPU coefficient modulus bit-sizes.")
 
+        print("before generation")
         result = self.HEonGPU_CKKS_Context_Generate(context_handle)
         if result != 0:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
             raise RuntimeError("Failed to generate HEonGPU context parameters.")
+        self.HEonGPU_PrintParameters(context_handle)
 
         print("HEonGPU CKKS Context successfully created and configured.")
 
@@ -371,23 +387,11 @@ class HEonGPULibrary:
             argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
             restype=ctypes.c_int 
         )
-        def GetPlaintextSlots(self, plaintext_handle):
-            if not plaintext_handle:
-                raise ValueError("Invalid plaintext handle provided.")
-            plain_size = self.GetPlaintextSize(plaintext_handle)
-            return plain_size // 2
-
-
         self.GetCiphertextSize = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Ciphertext_GetRingSize,
             argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
             restype=ctypes.c_int
         )
-        def GetCiphertextSlots(self, ciphertext_handle):
-            if not ciphertext_handle:
-                raise ValueError("Invalid ciphertext handle provided.")
-            ring_size = self.GetCiphertextSize(ciphertext_handle)
-            return ring_size // 2
 
 
         self.GetCiphertextDegree = HEonGPUFunction(
@@ -406,3 +410,151 @@ class HEonGPULibrary:
         #     ],
         #     restype=ctypes.c_size_t
         # )
+    
+    def GetPlaintextSlots(self, plaintext_handle):
+        if not plaintext_handle:
+            raise ValueError("Invalid plaintext handle provided.")
+        plain_size = self.GetPlaintextSize(plaintext_handle)
+        return plain_size // 2
+    
+    def GetCiphertextSlots(self, ciphertext_handle):
+        if not ciphertext_handle:
+            raise ValueError("Invalid ciphertext handle provided.")
+        ring_size = self.GetCiphertextSize(ciphertext_handle)
+        return ring_size // 2
+
+
+    def setup_key_generator(self):
+        self._NewKeyGenerator = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_KeyGenerator_Create,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=ctypes.POINTER(HE_CKKS_KeyGenerator)
+        )
+
+        self.CreateSecretKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_SecretKey_Create,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=ctypes.POINTER(HE_CKKS_SecretKey)
+        )
+
+        # Key must already exist
+        self._GenerateSecretKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_KeyGenerator_GenerateSecretKey,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_KeyGenerator),
+                ctypes.POINTER(HE_CKKS_SecretKey),
+                ctypes.POINTER(C_ExecutionOptions)   # Pointer to execution options (can be None/null)
+            ],
+            restype=ctypes.c_int 
+        )
+
+        self.CreatePublicKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_PublicKey_Create,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=ctypes.POINTER(HE_CKKS_PublicKey)
+        )
+        self._GeneratePublicKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_KeyGenerator_GeneratePublicKey,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_KeyGenerator),
+                ctypes.POINTER(HE_CKKS_PublicKey),
+                ctypes.POINTER(HE_CKKS_SecretKey),
+                ctypes.POINTER(C_ExecutionOptions)
+            ],
+            restype=ctypes.c_int 
+        )
+
+        self.CreateRelinearizationKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_RelinKey_Create,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.c_bool   #store_in_gpu
+            ],
+            restype=ctypes.POINTER(HE_CKKS_RelinKey)
+        )
+        self._GenerateRelinearizationKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_KeyGenerator_GenerateRelinKey,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_KeyGenerator),
+                ctypes.POINTER(HE_CKKS_RelinKey),
+                ctypes.POINTER(HE_CKKS_SecretKey),
+                ctypes.POINTER(C_ExecutionOptions)
+            ],
+            restype=ctypes.c_int
+        )
+
+        self.CreateGaloisKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_GaloisKey_Create,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.c_bool   #store_in_gpu
+            ],
+            restype=ctypes.POINTER(HE_CKKS_GaloisKey)
+        )
+        # I assume this means Galois Key
+        self.GenerateEvaluationKeys = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_KeyGenerator),
+                ctypes.POINTER(HE_CKKS_GaloisKey),
+                ctypes.POINTER(HE_CKKS_SecretKey),
+                ctypes.POINTER(C_ExecutionOptions)
+            ],
+            restype=ctypes.c_int
+        )
+
+        #For testing:
+        self.generateSecretAndPublicKey = HEonGPUFunction(
+            self.lib.generateSecretAndPublicKey,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.POINTER(C_ExecutionOptions)
+            ],
+            restype=None
+        )
+
+        # HEonGPU does have serialization/load functions for it's keys,
+        # but I must confirm that the functionality is the same
+        # self.SerializeSecretKey = HEonGPUFunction(
+        #     self.lib.SerializeSecretKey,
+        #     argtypes=[],
+        #     restype=ArrayResultByte
+        # )
+
+        # self.LoadSecretKey = HEonGPUFunction(
+        #     self.lib.LoadSecretKey,
+        #     argtypes=[ctypes.POINTER(ctypes.c_ubyte), ctypes.c_ulong],
+        #     restype=None
+        # )
+
+    def NewKeyGenerator(self):
+        self.keygenerator = self._NewKeyGenerator(self.context_handle)
+        return self.keygenerator
+    
+    def GenerateSecretKey(self):
+        self.secretkey = self.CreateSecretKey(self.context_handle)
+        return self._GenerateSecretKey(self.keygenerator, self.secretkey, None)
+
+    def GeneratePublicKey(self):
+        # self.publickey = self.CreatePublicKey(self.context_handle)
+        # print("a")
+        # print(self.keygenerator)
+        # print(self.publickey)
+        # print(self.secretkey)
+        # x = self._GeneratePublicKey(self.keygenerator, self.publickey, self.secretkey, None)
+        # print("b")
+        # return x
+        print("a")
+        self.generateSecretAndPublicKey(self.context_handle, None)
+        print("b")
+
+    def GenerateRelinearizationKey(self):
+        print("here")
+        self.relinkey = self.CreateRelinearizationKey(self.context_handle)
+        return self._GenerateRelinearizationKey(self.keygenerator, self.relinkey, self.secretkey, None)
+    
+
+    
+
+    
+
