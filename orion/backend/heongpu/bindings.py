@@ -16,6 +16,7 @@ class HE_CKKS_RelinKey(ctypes.Structure): pass
 class HE_CKKS_MultipartyRelinKey(ctypes.Structure): pass
 class HE_CKKS_GaloisKey(ctypes.Structure): pass
 class HE_CKKS_Encoder(ctypes.Structure): pass
+class HE_CKKS_Encryptor(ctypes.Structure): pass
 class HE_CKKS_Decryptor(ctypes.Structure): pass
 class HE_CKKS_KeyGenerator(ctypes.Structure): pass
 class HE_CKKS_ArithmeticOperator(ctypes.Structure): pass
@@ -210,13 +211,14 @@ class HEonGPULibrary:
         self.context_handle = self.setup_scheme(orion_params)
         self.setup_tensor_binds()
         self.setup_key_generator()
-        # self.setup_encoder()
-        # self.setup_encryptor()
-        # self.setup_evaluator()
+        self.setup_encoder()
+        self.setup_encryptor()
+        self.setup_evaluator()
         # self.setup_poly_evaluator()
         # self.setup_lt_evaluator()
         # self.setup_bootstrapper()
 
+    #setup scheme
     def setup_scheme(self, orion_params):
         """
         Initializes and configures the HEonGPU scheme by creating and setting up
@@ -326,7 +328,7 @@ class HEonGPULibrary:
 
         # context handle is required for all subsequent operations
         return context_handle
-
+    #tensor binds
     def setup_tensor_binds(self):
         self.DeletePlaintext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Plaintext_Delete,
@@ -423,7 +425,7 @@ class HEonGPULibrary:
         ring_size = self.GetCiphertextSize(ciphertext_handle)
         return ring_size // 2
 
-
+    #key generator
     def setup_key_generator(self):
         self._NewKeyGenerator = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_KeyGenerator_Create,
@@ -553,8 +555,122 @@ class HEonGPULibrary:
         self.relinkey = self.CreateRelinearizationKey(self.context_handle)
         return self._GenerateRelinearizationKey(self.keygenerator, self.relinkey, self.secretkey, None)
     
+    #encoder
+    def setup_encoder(self):
+        self._NewEncoder = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Encoder_Create,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=ctypes.POINTER(HE_CKKS_Encoder)
+        )
 
+        #TODO: Determine what the argtypes of encode mean, and add wrapper function
+        self._Encode = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Encoder_Encode_Double,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Encoder),    #encoder
+                ctypes.POINTER(HE_CKKS_Plaintext),  #plaintext
+                ctypes.POINTER(ctypes.c_double),    #data
+                ctypes.c_int,                       #length
+                ctypes.c_double,                    #scale
+                ctypes.POINTER(C_ExecutionOptions)  
+            ],
+            restype=ctypes.c_int
+        )
+        #TODO: Determine what the argtypes of decode mean, and add wrapper function
+        self.Decode = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Encoder_Decode_Double,
+            argtypes=[ctypes.c_int],
+            restype=ArrayResultFloat,
+        )
+
+    def NewEncoder(self):
+        self.encoder_handle =  self._NewEncoder(self.context_handle)
     
+    #encryptor
+    def setup_encryptor(self):
+        self._NewEncryptor = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Encryptor_Create_With_PublicKey,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context),
+            ctypes.POINTER(HE_CKKS_PublicKey)],
+            restype=ctypes.POINTER(HE_CKKS_Encryptor)
+        )
+
+        self._NewDecryptor = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Decryptor_Create,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context),
+            ctypes.POINTER(HE_CKKS_SecretKey)],
+            restype=None
+        )
+
+        #Originally argtypes were ctypes.c_int, which is incompatible with HEonGPU, hopefully this works
+        self.Encrypt = HEonGPUFunction(
+            self.lib.Encrypt,
+            argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
+        )
+        self.Decrypt = HEonGPUFunction(
+            self.lib.Decrypt,
+            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+            restype=ctypes.POINTER(HE_CKKS_Plaintext)
+        )
+    
+    def NewEncryptor(self):
+        #assume 1 global public key for public key encryption:
+        self.encryptor_handle = self._NewEncryptor(self.context_handle, self.publickey_handle)
+    def NewDecryptor(self):
+        #assume 1 global secret key for public key encryption:
+        self.decryptor_handle = self._NewDecryptor(self.context_handle, self.secretkey_handle)
+    
+
+    #evaluator:
+    def setup_evaluator():
+        self._NewEvaluator = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_Create,
+            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_Context),
+            ctypes.POINTER(ctypes.HE_CKKS_Encoder)],
+            restype=ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator)
+        )
+
+        self.NewPlaintext = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_Create,
+            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_Context),
+            ctypes.POINTER(C_ExecutionOptions)],
+            restype=ctypes.POINTER(ctypes.HE_CKKS_Plaintext)
+        )
+        self.NewCiphertext = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_Create,
+            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_Context),
+            ctypes.POINTER(C_ExecutionOptions)],
+            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+        )
+
+        #TODO: Determine the intention of this function, and map on correct HEonGPU 
+        self.AddRotationKey = LattigoFunction(
+            self.lib.AddRotationKey,
+            argtypes=[ctypes.c_int],
+            restype=None
+        )
+
+        self._Negate = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_Negate,
+            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
+            ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+            ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+            ctypes.POINTER(C_ExecutionOptions)],
+            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+        )
+    
+    def NewEvaluator(self):
+        self.arithmeticoperator_handle = self._NewEvaluator(self.context_handle, self.encoder_handle)
+    def Negate(self, ct):
+        #Not in place negation: must create empty ct for output first
+        newct = self.NewCiphertext(self.context_handle, None)
+        return self._Negate(self.arithmeticoperator_handle, ct, newct, None)
+    
+
+
+
+
 
     
 
