@@ -4,7 +4,7 @@ import platform
 
 import torch
 import numpy as np
-
+import hashlib
 
 class HE_CKKS_Context(ctypes.Structure): pass
 class HE_CKKS_Plaintext(ctypes.Structure): pass
@@ -214,9 +214,9 @@ class HEonGPULibrary:
         self.setup_encoder()
         self.setup_encryptor()
         self.setup_evaluator()
-        # self.setup_poly_evaluator()
-        # self.setup_lt_evaluator()
-        # self.setup_bootstrapper()
+        self.setup_poly_evaluator()
+        self.setup_lt_evaluator()
+        self.setup_bootstrapper()
 
     #setup scheme
     def setup_scheme(self, orion_params):
@@ -563,7 +563,6 @@ class HEonGPULibrary:
             restype=ctypes.POINTER(HE_CKKS_Encoder)
         )
 
-        #TODO: Determine what the argtypes of encode mean, and add wrapper function
         self._Encode = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Encoder_Encode_Double,
             argtypes=[
@@ -585,7 +584,10 @@ class HEonGPULibrary:
 
     def NewEncoder(self):
         self.encoder_handle =  self._NewEncoder(self.context_handle)
-    
+    def Encode(self, to_encode, level, scale):
+        pt = self.NewPlaintext(self.context_handle, None)
+        return self._Encode(self.encoder_handle, pt, to_encode, scale, None)
+  
     #encryptor
     def setup_encryptor(self):
         self._NewEncryptor = HEonGPUFunction(
@@ -864,7 +866,6 @@ class HEonGPULibrary:
         return self._Rescale(self.arithmeticoperator_handle, ct, newct, None)
 
     #For scalar operations, we must first encode scalar into a plaintext
-    #TODO: This, but must first complete encode
     def SubScalar(self, ct, scalar):
         #Must create plaintext then do sub
 
@@ -915,7 +916,205 @@ class HEonGPULibrary:
     #not currently implemented in HEonGPU wrapper
     #def MulRelinCiphertextNew():
 
+    #setup_poly_evaluator
+    def setup_poly_evaluator(self):
+        #No internal wrapped functions (for now)
+    
 
+    def NewPolynomialEvaluator(self):   
+        #we're just going to use aerithmetic operator, so for this step all we do is setup an array
+        self.polys = []
+
+    def GenerateMonomial(self, coeffsPtr, coeffsLen):
+        #Given an array of coefficients and the length of the array, save it to the array setup in NewPolynomialEvaluator, and return the index
+        self.polys.append(coeffsPtr)
+        return len(self.polys) - 1
+
+    def GenerateChebyshev(self, coeffsPtr, coeffsLen):
+        #Given an array of coefficients and the length of the array, save it to the array setup in NewPolynomialEvaluator, and return the index
+        #for now, the internal representation will be identiacal
+        return self.GenerateMonomial(coeffsPtr, coeffsLen)
+
+    def EvaluatePolynomial(self, ctxt_in_handle, poly_id, out_scale=None):
+        #we follow lattigo's approach here, for Monomial we simply use horner's method
+        #for Chebyshev we will treat it as the same for now, but in the future we can optimize by using Clenshaw's Algorithm
+        #Horner's method: y = ((...((c_d*x + c_{d-1})*x + ...)*x + c_0)
+        #The list is assumed to be [c_0, c_1, ..., c_d], so we process it backwards
+        coeffs = self.polys[poly_id]
+        degree = len(coeffs) - 1
+        current_scale = self.GetCiphertextScale(ctxt_in_handle)
+        current_level = self.GetCiphertextLevel(ctxt_in_handle)
+        highest_coeff_ptxt = self.Encode([coeffs[-1]], level=current_level, scale=current_scale)
+        result_ctxt_handle = self.Encrypt(highest_coeff_ptxt)
+        self.DeletePlaintext(highest_coeff_ptxt)
+        for i in range(degree - 1, -1, -1):
+            self.MulRelin_Inplace(result_ctxt_handle, ctxt_in_handle)
+            self.Rescale_Inplace(result_ctxt_handle)
+            next_coeff = coeffs[i]
+            rescaled_scale = self.GetCiphertextScale(result_ctxt_handle)
+            coeff_ptxt = self.Encode([next_coeff], level=self.GetCiphertextLevel(result_ctxt_handle), scale=rescaled_scale)
+            self.AddPlain_Inplace(result_ctxt_handle, coeff_ptxt)
+            self.DeletePlaintext(coeff_ptxt)
+        return result_ctxt_handle
+
+    def GenerateMinimaxSignCoeffs(self, degrees, prec=64, logalpha=12, logerr=12, debug=False):-
+        #Create a cache if it doesn't exist
+        if not hasattr(self, 'minimax_sign_coeffs_cache'):
+            self.minimax_sign_coeffs_cache = {}
+
+        key_params = (tuple(degrees), prec, logalpha, logerr)
+        param_hash = hashlib.sha256(str(key_params).encode()).hexdigest()
+
+        if param_hash in self.minimax_sign_coeffs_cache:
+            #If coefficients have been generated before, retrieve and return them
+            cached_coeffs_list = self.minimax_sign_coeffs_cache[param_hash]
+            flat_coeffs = [coeff for poly in cached_coeffs_list for coeff in poly]
+            return flat_coeffs
+
+        interval_start = -1.0
+        interval_end = 1.0
+        num_points = 1 << (prec.bit_length() + 1)
+        x_coords = np.linspace(interval_start, interval_end, num_points)
+        y_coords = np.sign(x_coords)
+
+        #The Lattigo function generates a composite polynomial
+        #x is passed through a series of polynomials
+        
+        generated_coeffs_list = []
+        max_degree = max(degrees)
+        weights = np.ones_like(x_coords)
+        weights[np.abs(x_coords) < 0.05] = 100 #Heavily weigh points near zero
+        
+        cheb_coeffs = np.polynomial.chebyshev.chebfit(x_coords, y_coords, max_degree, w=weights)
+        final_poly_coeffs = np.polynomial.chebyshev.cheb2poly(cheb_coeffs) # Convert to standard basis
+
+        all_polys = [final_poly_coeffs.tolist()]
+        for i in range(len(all_polys[-1])):
+            all_polys[-1][i] /= 2.0
+        all_polys[-1][0] += 0.5
+
+        self.minimax_sign_coeffs_cache[param_hash] = all_polys
+        flat_coeffs = [coeff for poly in all_polys for coeff in poly]
+        
+        return flat_coeffs
+
+
+    #setup_lt_evaluator
+    def setup_lt_evaluator():
+        #currently set up at python level, so no backend binding necassary
+
+    def NewLinearTransformEvaluator(self):
+        self.linear_transforms = []
+    
+    def GenerateLinearTransform(self, diags_idxs, diags_data, level, bsgs_ratio=1.0, io_mode="none"):
+        num_slots = self.GetPlaintextSlots(self.Encode([0.0])) # A bit of a hack to get N/2
+        #Un-flatten the diagonal data into a dictionary for easy access
+        diagonals = {}
+        offset = 0
+        for idx in diags_idxs:
+            diagonals[idx] = diags_data[offset : offset + num_slots]
+            offset += num_slots
+        transform_plan = {
+            "diagonals": diagonals,
+            "level": level
+            #more advanced implementation could store bsgs_ratio and io_mode (but for now we assume default)
+        }
+        self.linear_transforms.append(transform_plan)
+        return len(self.linear_transforms) - 1
+    
+    def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
+        plan = self.linear_transforms[transform_id]
+        diagonals = plan['diagonals']
+        input_scale = self.GetCiphertextScale(ctxt_in_handle)
+        input_level = self.GetCiphertextLevel(ctxt_in_handle)
+        zero_ptxt = self.Encode([0.0] * self.GetCiphertextSlots(ctxt_in_handle), level=input_level, scale=input_scale)
+        accumulator_ctxt = self.Encrypt(zero_ptxt)
+        self.DeletePlaintext(zero_ptxt)
+
+        #loop through each diagonal, perform Rotate->Mul->Add, and accumulate
+        for diag_idx, diag_coeffs in diagonals.items():
+            rotated_ctxt = self.Rotate(ctxt_in_handle, diag_idx)
+            #encode the plaintext diagonal - it must match the rotated ciphertext parameters
+            diag_ptxt = self.Encode(diag_coeffs, level=self.GetCiphertextLevel(rotated_ctxt), scale=self.GetCiphertextScale(rotated_ctxt))
+            #multiply the rotated ciphertext by the plaintext diagonal
+            term_ctxt = self.MulPlain(rotated_ctxt, diag_ptxt)
+
+            #running total
+            self.Add_Inplace(accumulator_ctxt, term_ctxt)
+
+            #clean up
+            self.DeletePlaintext(diag_ptxt)
+            self.DeleteCiphertext(term_ctxt)
+            if diag_idx != 0:
+                self.DeleteCiphertext(rotated_ctxt)
+        return accumulator_ctxt
+
+    def DeleteLinearTransform(self, transform_id):
+        if 0 <= transform_id < len(self.linear_transforms):
+            self.linear_transforms[transform_id] = None
+    
+
+    def GetLinearTransformRotationKeys(self, transform_id):
+        #inspects a compiled transform and returns the list of required rotation indices
+
+        plan = self.linear_transforms[transform_id]
+        #the diagonal indices are the rotation indices needed
+        #rotation by 0 is a conjugation, requires specific galois key
+        #Lattigo convention represent this with the Galois element for N+1
+        #but we use a simple mapping: rotation_step=0 -> galois_elt=0 (placeholder)
+        required_rotations = list(plan['diagonals'].keys())
+        if 0 in required_rotations:
+            #for conjugation
+            pass
+        return required_rotations
+
+    def GenerateLinearTransformRotationKey(self, rotation_step):
+        #Generates a single Galois key for a given rotation and caches
+        galois_key_handle = self.CreateGaloisKey_With_Shifts([rotation_step])
+        self.GenerateGaloisKey(galois_key_handle)
+        self.rotation_keys_cache[rotation_step] = galois_key_handle
+
+    def GenerateAndSerializeRotationKey(self, rotation_step):
+        #Generates a specific Galois key and returns its serialized byte representation
+        galois_key_handle = self.CreateGaloisKey_With_Shifts([rotation_step])
+        self.GenerateGaloisKey(galois_key_handle)
+        serialized_key_bytes, _ = self.SaveGaloisKey(galois_key_handle)
+        self.DeleteGaloisKey(galois_key_handle)
+        return serialized_key_bytes
+
+    def LoadRotationKey(self, serialized_key, rotation_step):
+        #Deserializes a Galois key and caches it for later use by the evaluator
+        galois_key_handle = self.LoadGaloisKey(serialized_key, [rotation_step])
+        self.rotation_keys_cache[rotation_step] = galois_key_handle
+
+    def SerializeDiagonal(self, transform_id, diag_idx):
+        #Encodes and then serializes a specific diagonal from a transform plan
+        plan = self.linear_transforms[transform_id]
+        diag_coeffs = plan['diagonals'].get(diag_idx)
+        scale = self.params.get_default_scale()
+        level = plan['level']
+        plaintext_handle = self.Encode(diag_coeffs, level=level, scale=scale)
+        serialized_diag, _ = self.SavePlaintext(plaintext_handle)
+        self.DeletePlaintext(plaintext_handle)
+        return serialized_diag
+
+    def LoadPlaintextDiagonal(self, serialized_diag, transform_id, diag_idx):
+        #might be required later if implemented in c backend, but not now
+
+    def RemovePlaintextDiagonals(self, transform_id):
+        if 0 <= transform_id < len(self.linear_transforms):
+            plan = self.linear_transforms[transform_id]
+            if plan and 'diagonals' in plan:
+                plan['diagonals'].clear()
+    def RemoveRotationKeys(self):
+        if hasattr(self, 'rotation_keys_cache'):
+            for key_handle in self.rotation_keys_cache.values():
+                if key_handle:
+                    self.DeleteGaloisKey(key_handle)
+            self.rotation_keys_cache.clear()
+
+    def setup_bootstrapper():
+        
     
     
 
