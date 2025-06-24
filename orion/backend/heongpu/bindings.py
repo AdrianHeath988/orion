@@ -28,6 +28,15 @@ class C_ExecutionOptions(ctypes.Structure):
         ("storage", C_storage_type),
         ("keep_initial_condition", ctypes.c_bool)
     ]
+
+class C_BootstrappingConfig(ctypes.Structure):
+    _fields_ = [
+        ("CtoS_piece", ctypes.c_int),
+        ("StoC_piece", ctypes.c_int),
+        ("taylor_number", ctypes.c_int),
+        ("less_key_mode", ctypes.c_bool)
+    ]
+
 class ArrayResultInt(ctypes.Structure):
     _fields_ = [("Data", ctypes.POINTER(ctypes.c_int)), 
                 ("Length", ctypes.c_size_t)]
@@ -305,7 +314,7 @@ class HEonGPULibrary:
         logp = orion_params.get_logp()             # Bit-lengths of P primes
         # Unable to set scale directly in heongpu context, it's set in the encoder instead by user input
         scale = 1 << orion_params.get_logscale()   # logscale -> scale
-
+        self.scale  = scale
         
         context_handle = self.HEonGPU_CKKS_Context_Create(keyswitch_method, sec_level)
         if not context_handle:
@@ -1114,7 +1123,142 @@ class HEonGPULibrary:
             self.rotation_keys_cache.clear()
 
     def setup_bootstrapper():
+        self._GenerateBootstrappingParams = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_GenerateBootstrappingParams,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.c_double,
+                ctypes.POINTER(C_BootstrappingConfig)
+            ],
+            restype=ctypes.c_int 
+        )
+        self._GetBootstrappingKeyIndices = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_GenerateBootstrappingParams,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(ctypes.POINTER(c_int)),
+                ctypes.POINTER(c_uint64)
+            ],
+            restype=ctypes.c_int 
+        )
+        self._RegularBootstrapping = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_GenerateBootstrappingParams,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_GaloisKey),
+                ctypes.POINTER(HE_CKKS_RelinKey),
+                ctypes.POINTER(C_ExecutionOptions)
+            ],
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
+        )
+    
+
+    BOOTSTRAP_PRESET_CONFIG = {
+        # Target Depth: { 'taylor_number', 'CtoS_piece', 'StoC_piece', 'less_key_mode' }
+        1: {
+            'taylor_number': 7, 
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        2: {
+            'taylor_number': 7,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        3: {
+            'taylor_number': 7,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        4: {
+            'taylor_number': 11,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        5: {
+            'taylor_number': 11,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        6: {
+            'taylor_number': 15,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        7: {
+            'taylor_number': 15,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        8: {
+            'taylor_number': 15,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        9: {
+            'taylor_number': 15, # WARNING: Max recommended value reached
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        },
+        10: {
+            'taylor_number': 15,
+            'CtoS_piece': 8,
+            'StoC_piece': 8,
+            'less_key_mode': False
+        }
+    }
+    def NewBootstrapper(self, logPs, length, num_slots):
+        #we dont care about the exaxt logPs, or num_slots, just the length. HEonGPU will create the logPs from the parameters given:
+
+
+        config_params = BOOTSTRAP_PRESET_CONFIG[length]
+
+        boot_config = C_BootstrappingConfig(
+            CtoS_piece=config_params['CtoS_piece'],
+            StoC_piece=config_params['StoC_piece'],
+            taylor_number=config_params['taylor_number'],
+            less_key_mode=config_params['less_key_mode']
+        )
+
+
+        self.bootstrap_handle = self._GenerateBootstrappingParams(
+            self.arithmeticoperator_handle,
+            ctypes.c_double(self.scale),
+            ctypes.byref(boot_config)
+        )
+
+    def Bootstrap(self, ct, num_slots):
+        indices_ptr = ctypes.POINTER(ctypes.c_int)()
+        count = ctypes.c_size_t()
         
+        status = self._GetBootstrappingKeyIndices(
+            self.arithmeticoperator_handle,
+            ctypes.byref(indices_ptr),
+            ctypes.byref(count)
+        )
+        galois_key_handle = self._CreateGaloisKeyWithIndices(
+            self.context_handle,
+            indices_ptr,
+            count
+        )
+        bootstrapped_ct = self._RegularBootstrapping(
+            self.arithmeticoperator_handle,
+            ct,
+            galois_key_handle,
+            self.relinkey_handle,
+            None 
+        )
+
     
     
 
