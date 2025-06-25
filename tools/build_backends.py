@@ -69,7 +69,7 @@ def build_heongpu(root_dir, env):
         "cmake",
         "-S", ".",  # Source directory (current dir when cwd is heongpu_source_dir)
         "-B", heongpu_build_dir_name, # Build directory
-        "-D", "HEonGPU_BUILD_EXAMPLES=ON"
+        "-D", "HEonGPU_BUILD_EXAMPLES=ON",
         "-D", "CMAKE_CUDA_ARCHITECTURES=86"
         # Add other -D flags if needed, e.g., CMAKE_BUILD_TYPE
         # Consider adding -D CMAKE_INSTALL_PREFIX=./install_heongpu for local install
@@ -181,7 +181,7 @@ def build(setup_kwargs=None):
             env["GOARCH"] = "amd64"
 
     # Build Lattigo
-    build_lattigo(root_dir, env.copy()) # Pass a copy of env in case functions modify it
+    #build_lattigo(root_dir, env.copy()) # Pass a copy of env in case functions modify it
     # Build HEonGPU
     # HEonGPU doesn't need GOARCH, CGO_ENABLED from Lattigo's specific env settings.
     # It will use the general os.environ copy, unless specific env vars are needed for CMake/CUDA.

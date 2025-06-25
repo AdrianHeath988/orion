@@ -71,7 +71,14 @@ class HEonGPUFunction:
         """
         py_args_list = list(args)
         c_args_list = []
-        
+        print(f"DEBUG: Preparing to call C function: {self.func.__name__}")
+        if self.func.argtypes:
+            print(f"DEBUG: Expected CTypes Signature: {[str(arg) for arg in self.func.argtypes]}")
+        print(f"DEBUG: Actual Arguments Being Passed ({len(c_args_list)} total):")
+        for i, arg in enumerate(c_args_list):
+            print(f"  - Arg {i}: type={type(arg)}, value={arg}")
+        print("-" * 50)
+
         # Use a while loop to manually control indices for both arg lists
         py_arg_idx = 0
         c_arg_type_idx = 0
@@ -180,6 +187,7 @@ class HEonGPULibrary:
     """A class to manage loading and interfacing with Lattigo."""
     def __init__(self):
         self.lib = self._load_library()
+        print(f"DEBUG: Successfully loaded library from: {self.lib._name}")
 
     def _load_library(self):
         try:
@@ -224,7 +232,7 @@ class HEonGPULibrary:
         self.setup_encryptor()
         self.setup_evaluator()
         self.setup_poly_evaluator()
-        self.setup_lt_evaluator()
+        #self.setup_lt_evaluator()
         self.setup_bootstrapper()
 
     #setup scheme
@@ -502,8 +510,8 @@ class HEonGPULibrary:
             ],
             restype=ctypes.POINTER(HE_CKKS_GaloisKey)
         )
-        # I assume this means Galois Key
-        self.GenerateEvaluationKeys = HEonGPUFunction(
+        # I assume this means Galois Keys
+        self.GenerateGaloisKey = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey,
             argtypes=[
                 ctypes.POINTER(HE_CKKS_KeyGenerator),
@@ -539,31 +547,28 @@ class HEonGPULibrary:
         # )
 
     def NewKeyGenerator(self):
-        self.keygenerator = self._NewKeyGenerator(self.context_handle)
-        return self.keygenerator
+        self.keygenerator_handle = self._NewKeyGenerator(self.context_handle)
+        return self.keygenerator_handle
     
     def GenerateSecretKey(self):
-        self.secretkey = self.CreateSecretKey(self.context_handle)
-        return self._GenerateSecretKey(self.keygenerator, self.secretkey, None)
+        self.secretkey_handle = self.CreateSecretKey(self.context_handle)
+        return self._GenerateSecretKey(self.keygenerator_handle, self.secretkey_handle, None)
 
     def GeneratePublicKey(self):
-        # self.publickey = self.CreatePublicKey(self.context_handle)
-        # print("a")
-        # print(self.keygenerator)
-        # print(self.publickey)
-        # print(self.secretkey)
-        # x = self._GeneratePublicKey(self.keygenerator, self.publickey, self.secretkey, None)
-        # print("b")
-        # return x
-        print("a")
-        self.generateSecretAndPublicKey(self.context_handle, None)
-        print("b")
+        self.publickey_handle = self.CreatePublicKey(self.context_handle)
+        x = self._GeneratePublicKey(self.keygenerator_handle, self.publickey_handle, self.secretkey_handle, None)
+        return x
+
 
     def GenerateRelinearizationKey(self):
         print("here")
-        self.relinkey = self.CreateRelinearizationKey(self.context_handle)
-        return self._GenerateRelinearizationKey(self.keygenerator, self.relinkey, self.secretkey, None)
+        self.relinkey_handle = self.CreateRelinearizationKey(self.context_handle, False)
+        return self._GenerateRelinearizationKey(self.keygenerator_handle, self.relinkey_handle, self.secretkey_handle, None)
     
+    def GenerateEvaluationKeys(self):
+        self.galoiskey_handle = self.CreateGaloisKey(self.context_handle, False)
+        return self.GenerateGaloisKey(self.keygenerator_handle, self.galoiskey_handle, self.secretkey_handle, None)
+
     #encoder
     def setup_encoder(self):
         self._NewEncoder = HEonGPUFunction(
@@ -614,14 +619,19 @@ class HEonGPULibrary:
         )
 
         #Originally argtypes were ctypes.c_int, which is incompatible with HEonGPU, hopefully this works
-        self.Encrypt = HEonGPUFunction(
-            self.lib.Encrypt,
-            argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
+        self._Encrypt = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Encryptor_Encrypt_New,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Encryptor),
+                ctypes.POINTER(HE_CKKS_Plaintext),
+                ctypes.POINTER(C_ExecutionOptions)
+                ],
             restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
-        self.Decrypt = HEonGPUFunction(
-            self.lib.Decrypt,
-            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+        self._Decrypt = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Decryptor_Decrypt,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Ciphertext)],
             restype=ctypes.POINTER(HE_CKKS_Plaintext)
         )
     
@@ -631,53 +641,58 @@ class HEonGPULibrary:
     def NewDecryptor(self):
         #assume 1 global secret key for public key encryption:
         self.decryptor_handle = self._NewDecryptor(self.context_handle, self.secretkey_handle)
-    
+    def Encrypt(self, pt):
+        self._Encrypt(self.encryptor_handle, pt, None)
+    def Decrypt(self, ct):
+        pass
 
     #evaluator:
-    def setup_evaluator():
+    def setup_evaluator(self):
         self._NewEvaluator = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Create,
-            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_Context),
-            ctypes.POINTER(ctypes.HE_CKKS_Encoder)],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator)
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.POINTER(HE_CKKS_Encoder)
+            ],
+            restype=ctypes.POINTER(HE_CKKS_ArithmeticOperator)
         )
 
         self.NewPlaintext = HEonGPUFunction(
-            self.lib.HEonGPU_CKKS_ArithmeticOperator_Create,
-            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_Context),
+            self.lib.HEonGPU_CKKS_Plaintext_Create,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context),
             ctypes.POINTER(C_ExecutionOptions)],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Plaintext)
+            restype=ctypes.POINTER(HE_CKKS_Plaintext)
         )
         self.NewCiphertext = HEonGPUFunction(
-            self.lib.HEonGPU_CKKS_ArithmeticOperator_Create,
-            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_Context),
+            self.lib.HEonGPU_CKKS_Ciphertext_Create,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context),
             ctypes.POINTER(C_ExecutionOptions)],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
 
         #TODO: Determine the intention of this function, and map on correct HEonGPU 
-        self.AddRotationKey = LattigoFunction(
-            self.lib.AddRotationKey,
-            argtypes=[ctypes.c_int],
-            restype=None
-        )
+        # self.AddRotationKey = HEonGPUFunction(
+        #     self.lib.AddRotationKey,
+        #     argtypes=[ctypes.c_int],
+        #     restype=None
+        # )
 
         self._Negate = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Negate,
-            argtypes=[ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-            ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-            ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+            argtypes=[ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+            ctypes.POINTER(HE_CKKS_Ciphertext),
+            ctypes.POINTER(HE_CKKS_Ciphertext),
             ctypes.POINTER(C_ExecutionOptions)],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
 
         self._Rotate = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Rotate_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
                 ctypes.c_int,    #amount
-                ctypes.POINTER(ctypes.HE_CKKS_GaloisKey),
+                ctypes.POINTER(HE_CKKS_GaloisKey),
                 ctypes.POINTER(C_ExecutionOptions)
             ],
             restype=None
@@ -685,21 +700,21 @@ class HEonGPULibrary:
         self._RotateNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Rotate,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
                 ctypes.c_int,    #amount
-                ctypes.POINTER(ctypes.HE_CKKS_GaloisKey),
+                ctypes.POINTER(HE_CKKS_GaloisKey),
                 ctypes.POINTER(C_ExecutionOptions)
             ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )   
 
         self._Rescale = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_ModDrop_Ciphertext_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -708,20 +723,20 @@ class HEonGPULibrary:
         self._RescaleNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_ModDrop_Ciphertext,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
 
         self._SubPlaintext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Sub_Plain_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Plaintext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Plaintext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -729,21 +744,21 @@ class HEonGPULibrary:
         self._SubPlaintextNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Sub_Plain,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Plaintext),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Plaintext),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
 
         self._AddPlaintext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Add_Plain_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Plaintext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Plaintext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -751,20 +766,20 @@ class HEonGPULibrary:
         self._AddPlaintextNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Add_Plain,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Plaintext),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Plaintext),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
         self._MultiplyPlaintext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Multiply_Plain_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Plaintext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Plaintext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -772,21 +787,21 @@ class HEonGPULibrary:
         self._MultiplyPlaintextNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Multiply_Plain,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
-                ctypes.POINTER(ctypes.HE_CKKS_Plaintext),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(HE_CKKS_Plaintext),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
         #ciphertext:
         self._AddCiphertext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Add_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in/out
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in/out
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -794,20 +809,20 @@ class HEonGPULibrary:
         self._AddCiphertextNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Add,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #out
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #out
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
         self._SubCiphertext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Sub_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in/out
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in/out
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -815,20 +830,20 @@ class HEonGPULibrary:
         self._SubCiphertextNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Sub,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #out
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #out
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
         self._MultiplyCiphertext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Multiply_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in/out
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in/out
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -836,20 +851,20 @@ class HEonGPULibrary:
         self._MultiplyCiphertextNew = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Multiply,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #out
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #out
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
-            restype=ctypes.POINTER(ctypes.HE_CKKS_Ciphertext)
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
         self._RelinearizeCiphertext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Relinearize_Inplace,
             argtypes=[
-                ctypes.POINTER(ctypes.HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.HE_CKKS_Ciphertext),  #in/out
-                ctypes.POINTER(ctypes.HE_CKKS_RelinKey),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),  #in/out
+                ctypes.POINTER(HE_CKKS_RelinKey),
                 ctypes.POINTER(C_ExecutionOptions)
                 ],
             restype=None
@@ -858,6 +873,8 @@ class HEonGPULibrary:
         
     
     def NewEvaluator(self):
+        print(self.context_handle)
+        print(self.encoder_handle)
         self.arithmeticoperator_handle = self._NewEvaluator(self.context_handle, self.encoder_handle)
     def Negate(self, ct):
         #Not in place negation: must create empty ct for output first
@@ -875,22 +892,22 @@ class HEonGPULibrary:
         return self._Rescale(self.arithmeticoperator_handle, ct, newct, None)
 
     #For scalar operations, we must first encode scalar into a plaintext
-    def SubScalar(self, ct, scalar):
-        #Must create plaintext then do sub
+    # def SubScalar(self, ct, scalar):
+    #     #Must create plaintext then do sub
 
-    def SubScalarNew(self, ct, scalar):
+    # def SubScalarNew(self, ct, scalar):
         
-    def AddScalar():
+    # def AddScalar():
     
-    def AddScalarNew():
+    # def AddScalarNew():
 
-    def MulScalarInt():
+    # def MulScalarInt():
 
-    def MulScalarIntNew():
+    # def MulScalarIntNew():
     
-    def MulScalarFloat():
+    # def MulScalarFloat():
 
-    def MulScalarFloatNew():
+    # def MulScalarFloatNew():
     
     #these functions should be simple wrappers
     def AddPlaintext(self, ct, pt):
@@ -928,6 +945,7 @@ class HEonGPULibrary:
     #setup_poly_evaluator
     def setup_poly_evaluator(self):
         #No internal wrapped functions (for now)
+        pass
     
 
     def NewPolynomialEvaluator(self):   
@@ -966,7 +984,7 @@ class HEonGPULibrary:
             self.DeletePlaintext(coeff_ptxt)
         return result_ctxt_handle
 
-    def GenerateMinimaxSignCoeffs(self, degrees, prec=64, logalpha=12, logerr=12, debug=False):-
+    def GenerateMinimaxSignCoeffs(self, degrees, prec=64, logalpha=12, logerr=12, debug=False):
         #Create a cache if it doesn't exist
         if not hasattr(self, 'minimax_sign_coeffs_cache'):
             self.minimax_sign_coeffs_cache = {}
@@ -1011,6 +1029,7 @@ class HEonGPULibrary:
     #setup_lt_evaluator
     def setup_lt_evaluator():
         #currently set up at python level, so no backend binding necassary
+        pass
 
     def NewLinearTransformEvaluator(self):
         self.linear_transforms = []
@@ -1109,6 +1128,7 @@ class HEonGPULibrary:
 
     def LoadPlaintextDiagonal(self, serialized_diag, transform_id, diag_idx):
         #might be required later if implemented in c backend, but not now
+        pass
 
     def RemovePlaintextDiagonals(self, transform_id):
         if 0 <= transform_id < len(self.linear_transforms):
@@ -1122,7 +1142,7 @@ class HEonGPULibrary:
                     self.DeleteGaloisKey(key_handle)
             self.rotation_keys_cache.clear()
 
-    def setup_bootstrapper():
+    def setup_bootstrapper(self):
         self._GenerateBootstrappingParams = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_GenerateBootstrappingParams,
             argtypes=[
@@ -1136,8 +1156,8 @@ class HEonGPULibrary:
             self.lib.HEonGPU_CKKS_ArithmeticOperator_GenerateBootstrappingParams,
             argtypes=[
                 ctypes.POINTER(HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(ctypes.POINTER(c_int)),
-                ctypes.POINTER(c_uint64)
+                ctypes.POINTER(ctypes.POINTER(ctypes.c_int)),
+                ctypes.POINTER(ctypes.c_uint64)
             ],
             restype=ctypes.c_int 
         )
@@ -1153,7 +1173,7 @@ class HEonGPULibrary:
             restype=ctypes.POINTER(HE_CKKS_Ciphertext)
         )
     
-
+    #should generally work (might overshoot)
     BOOTSTRAP_PRESET_CONFIG = {
         # Target Depth: { 'taylor_number', 'CtoS_piece', 'StoC_piece', 'less_key_mode' }
         1: {
