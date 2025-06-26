@@ -37,6 +37,13 @@ class C_BootstrappingConfig(ctypes.Structure):
         ("less_key_mode", ctypes.c_bool)
     ]
 
+class C_Modulus64(ctypes.Structure):
+    _fields_ = [
+        ("value", ctypes.c_uint64),
+        ("bit", ctypes.c_int),
+        ("mu", ctypes.c_uint64) #assuming mu is uint64_t
+    ]
+
 class ArrayResultInt(ctypes.Structure):
     _fields_ = [("Data", ctypes.POINTER(ctypes.c_int)), 
                 ("Length", ctypes.c_size_t)]
@@ -71,15 +78,7 @@ class HEonGPUFunction:
         """
         py_args_list = list(args)
         c_args_list = []
-        print(f"DEBUG: Preparing to call C function: {self.func.__name__}")
-        if self.func.argtypes:
-            print(f"DEBUG: Expected CTypes Signature: {[str(arg) for arg in self.func.argtypes]}")
-        print(f"DEBUG: Actual Arguments Being Passed ({len(c_args_list)} total):")
-        for i, arg in enumerate(c_args_list):
-            print(f"  - Arg {i}: type={type(arg)}, value={arg}")
-        print("-" * 50)
-
-        # Use a while loop to manually control indices for both arg lists
+        
         py_arg_idx = 0
         c_arg_type_idx = 0
         
@@ -87,19 +86,23 @@ class HEonGPUFunction:
             while py_arg_idx < len(py_args_list):
                 current_py_arg = py_args_list[py_arg_idx]
                 current_c_type = self.func.argtypes[c_arg_type_idx]
-                if isinstance(current_py_arg, list) and isinstance(current_c_type, type(ctypes.POINTER(ctypes.c_void_p))):
+                
+                is_pointer_type = isinstance(current_c_type, type(ctypes.POINTER(ctypes.c_void_p)))
+                is_array_like = isinstance(current_py_arg, (list, np.ndarray))
 
-                    len_c_type = self.func.argtypes[c_arg_type_idx + 1]
-                    if len_c_type is not ctypes.c_size_t:
-                        raise TypeError(f"C function signature is incorrect: Expected c_size_t after pointer for list argument, but got {len_c_type}")
+                if is_array_like and is_pointer_type:
+                    if (c_arg_type_idx + 1) >= len(self.func.argtypes) or self.func.argtypes[c_arg_type_idx + 1] is not ctypes.c_size_t:
+                        raise TypeError(f"C function signature is incorrect: Expected c_size_t after pointer for list/array argument, but got something else.")
+                    
                     c_arg_tuple = self.convert_to_ctypes(current_py_arg, current_c_type)
+                    if c_arg_tuple is None:
+                         raise TypeError(f"Conversion of Python type '{type(current_py_arg)}' to C-type '{current_c_type}' failed and returned None.")
                     c_args_list.extend(c_arg_tuple)
                     py_arg_idx += 1
                     c_arg_type_idx += 2
                 else:
                     c_arg = self.convert_to_ctypes(current_py_arg, current_c_type)
                     c_args_list.append(c_arg)
-                    
                     py_arg_idx += 1
                     c_arg_type_idx += 1
         
@@ -110,38 +113,49 @@ class HEonGPUFunction:
 
     @torch._dynamo.disable
     def convert_to_ctypes(self, arg, typ):
-        if isinstance(arg, int) and typ == ctypes.c_int:
-            return ctypes.c_int(arg)
-        elif isinstance(arg, int) and typ == ctypes.c_ulong:
-            return ctypes.c_ulong(arg)
-        elif isinstance(arg, float):
-            return ctypes.c_float(arg)
+        if arg is None:
+            return None
+        if isinstance(arg, (int, float)):
+            if typ == ctypes.c_double:
+                return ctypes.c_double(float(arg))
+            if typ == ctypes.c_float:
+                return ctypes.c_float(float(arg))
+            if typ == ctypes.c_int:
+                return ctypes.c_int(int(arg))
+            if typ == ctypes.c_ulong:
+                return ctypes.c_ulong(int(arg))
         elif isinstance(arg, str):
             return arg.encode('utf-8')
-        elif (isinstance(arg, np.ndarray) and 
-            arg.dtype == np.uint8 and 
-            typ == ctypes.POINTER(ctypes.c_ubyte)):
-            ptr = arg.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
-            return (ptr, len(arg))
-        elif isinstance(arg, list):
-            if typ == ctypes.POINTER(ctypes.c_int):
-                return ((ctypes.c_int * len(arg))(*arg), len(arg))
-            elif typ == ctypes.POINTER(ctypes.c_uint64):
-                return ((ctypes.c_uint64 * len(arg))(*arg), len(arg))
-            elif typ == ctypes.POINTER(ctypes.c_ulong):
-                return ((ctypes.c_ulong * len(arg))(*arg), len(arg))
-            elif typ == ctypes.POINTER(ctypes.c_ubyte):
-                return ((ctypes.c_ubyte * len(arg))(*arg), len(arg))
-            elif typ == ctypes.POINTER(ctypes.c_float):
-                return ((ctypes.c_float * len(arg))(*arg), len(arg))
-            elif typ == ctypes.POINTER(ctypes.c_ulong):
-                return ((ctypes.c_ulong * len(arg))(*arg), len(arg))
-            elif typ == ctypes.POINTER(ctypes.c_ubyte):
-                return ((ctypes.c_ubyte * len(arg))(*arg), len(arg))
+        
+        elif isinstance(arg, np.ndarray):
+            if not arg.flags['C_CONTIGUOUS']:
+                arg = np.ascontiguousarray(arg)
+
+            if arg.dtype == np.float64 and typ == ctypes.POINTER(ctypes.c_double):
+                ptr = arg.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+                return (ptr, len(arg))
+            elif arg.dtype == np.uint8 and typ == ctypes.POINTER(ctypes.c_ubyte):
+                ptr = arg.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+                return (ptr, len(arg))
             else:
-                raise ValueError("Unexpected list type to convert.")
+                 raise TypeError(f"Unsupported numpy array dtype '{arg.dtype}' for C conversion.")
+        
+        elif isinstance(arg, list):
+            c_elem_type = None
+            if typ == ctypes.POINTER(ctypes.c_int): c_elem_type = ctypes.c_int
+            elif typ == ctypes.POINTER(ctypes.c_uint64): c_elem_type = ctypes.c_uint64
+            elif typ == ctypes.POINTER(ctypes.c_ulong): c_elem_type = ctypes.c_ulong
+            elif typ == ctypes.POINTER(ctypes.c_ubyte): c_elem_type = ctypes.c_ubyte
+            elif typ == ctypes.POINTER(ctypes.c_float): c_elem_type = ctypes.c_float
+            elif typ == ctypes.POINTER(ctypes.c_double): c_elem_type = ctypes.c_double 
+            
+            if c_elem_type:
+                ArrayType = c_elem_type * len(arg)
+                return (ArrayType(*arg), len(arg))
+            else:
+                raise ValueError(f"Unexpected list conversion to pointer type: {typ}")
         else:
-            return arg
+            return arg 
             
     def convert_from_ctypes(self, res, restype):
         if (hasattr(restype, '_type_') and 
@@ -187,6 +201,8 @@ class HEonGPULibrary:
     """A class to manage loading and interfacing with Lattigo."""
     def __init__(self):
         self.lib = self._load_library()
+        self.linear_transforms = []
+        self.rotation_keys_cache = {}
         print(f"DEBUG: Successfully loaded library from: {self.lib._name}")
 
     def _load_library(self):
@@ -316,8 +332,9 @@ class HEonGPULibrary:
         
         # Lattigo parameters mapped to HEonGPU
         poly_degree = 1 << orion_params.get_logn() # logn -> n
-        poly_degree = 8192
+        poly_degree = 8192 #originally 8192
         print(poly_degree)
+        self.poly_degree = poly_degree
         logq = orion_params.get_logq()             # Bit-lengths of Q primes
         logp = orion_params.get_logp()             # Bit-lengths of P primes
         # Unable to set scale directly in heongpu context, it's set in the encoder instead by user input
@@ -419,17 +436,37 @@ class HEonGPULibrary:
             restype=ctypes.c_int
         )
 
-        # Not a thing currently (check context_c_api.cu) to implement
-        # self.GetModuliChain = HEonGPUFunction(
-        #     self.lib.HEonGPU_CKKS_Context_GetCoeffModulus,
-        #     argtypes=[
-        #         ctypes.POINTER(HE_CKKS_Context),
-        #         ctypes.POINTER(C_Modulus64),
-        #         ctypes.c_size_t
-        #     ],
-        #     restype=ctypes.c_size_t
-        # )
+        self._GetModuliChain = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_GetCoeffModulus,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.POINTER(C_Modulus64),
+                ctypes.c_size_t
+            ],
+            restype=ctypes.c_size_t
+        )
     
+    def GetModuliChain(self):
+        required_size = self._GetModuliChain(
+            self.context_handle,
+            None,
+            0
+        )
+        if required_size == 0:
+            print("DEBUG: GetModuliChain required_size 0")
+            return []
+        BufferType = C_Modulus64 * required_size
+        moduli_buffer = BufferType()
+        num_copied = self._GetModuliChain(
+            self.context_handle,
+            moduli_buffer,
+            required_size
+        )
+        if num_copied != required_size:
+            print(f"Warning: Expected to copy {required_size} moduli, but only got {num_copied}.")
+
+        return [moduli_buffer[i].value for i in range(num_copied)]
+
     def GetPlaintextSlots(self, plaintext_handle):
         if not plaintext_handle:
             raise ValueError("Invalid plaintext handle provided.")
@@ -510,6 +547,15 @@ class HEonGPULibrary:
             ],
             restype=ctypes.POINTER(HE_CKKS_GaloisKey)
         )
+        self.CreateGaloisKeyWithShifts = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_GaloisKey_Create_With_Shifts,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.POINTER(ctypes.c_int),   #shift_vec
+                ctypes.c_size_t #shift_vec len
+            ],
+            restype=ctypes.POINTER(HE_CKKS_GaloisKey)
+        )
         # I assume this means Galois Keys
         self.GenerateGaloisKey = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey,
@@ -545,6 +591,17 @@ class HEonGPULibrary:
         #     argtypes=[ctypes.POINTER(ctypes.c_ubyte), ctypes.c_ulong],
         #     restype=None
         # )
+
+        self.SaveGaloisKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_GaloisKey_Save, 
+            [ctypes.POINTER(HE_CKKS_GaloisKey), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)), ctypes.POINTER(ctypes.c_size_t)], 
+            ctypes.c_int
+        )
+        self.DeleteGaloisKey = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_GaloisKey_Delete, 
+            [ctypes.POINTER(HE_CKKS_GaloisKey)], 
+            None
+        )
 
     def NewKeyGenerator(self):
         self.keygenerator_handle = self._NewKeyGenerator(self.context_handle)
@@ -583,7 +640,7 @@ class HEonGPULibrary:
                 ctypes.POINTER(HE_CKKS_Encoder),    #encoder
                 ctypes.POINTER(HE_CKKS_Plaintext),  #plaintext
                 ctypes.POINTER(ctypes.c_double),    #data
-                ctypes.c_int,                       #length
+                ctypes.c_size_t,                       #length
                 ctypes.c_double,                    #scale
                 ctypes.POINTER(C_ExecutionOptions)  
             ],
@@ -1035,7 +1092,7 @@ class HEonGPULibrary:
         self.linear_transforms = []
     
     def GenerateLinearTransform(self, diags_idxs, diags_data, level, bsgs_ratio=1.0, io_mode="none"):
-        num_slots = self.GetPlaintextSlots(self.Encode([0.0])) # A bit of a hack to get N/2
+        num_slots = self.poly_degree//2 
         #Un-flatten the diagonal data into a dictionary for easy access
         diagonals = {}
         offset = 0
@@ -1098,14 +1155,24 @@ class HEonGPULibrary:
 
     def GenerateLinearTransformRotationKey(self, rotation_step):
         #Generates a single Galois key for a given rotation and caches
-        galois_key_handle = self.CreateGaloisKey_With_Shifts([rotation_step])
-        self.GenerateGaloisKey(galois_key_handle)
+        galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, [rotation_step])
+        status = self.GenerateGaloisKey(
+            self.keygenerator_handle, 
+            galois_key_handle, 
+            self.secretkey_handle, 
+            None
+        )
         self.rotation_keys_cache[rotation_step] = galois_key_handle
 
     def GenerateAndSerializeRotationKey(self, rotation_step):
         #Generates a specific Galois key and returns its serialized byte representation
-        galois_key_handle = self.CreateGaloisKey_With_Shifts([rotation_step])
-        self.GenerateGaloisKey(galois_key_handle)
+        galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, [rotation_step])
+        status = self.GenerateGaloisKey(
+            self.keygenerator_handle, 
+            galois_key_handle, 
+            self.secretkey_handle, 
+            None
+        )
         serialized_key_bytes, _ = self.SaveGaloisKey(galois_key_handle)
         self.DeleteGaloisKey(galois_key_handle)
         return serialized_key_bytes
@@ -1153,7 +1220,7 @@ class HEonGPULibrary:
             restype=ctypes.c_int 
         )
         self._GetBootstrappingKeyIndices = HEonGPUFunction(
-            self.lib.HEonGPU_CKKS_ArithmeticOperator_GenerateBootstrappingParams,
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_GetBootstrappingKeyIndices,
             argtypes=[
                 ctypes.POINTER(HE_CKKS_ArithmeticOperator),
                 ctypes.POINTER(ctypes.POINTER(ctypes.c_int)),
@@ -1162,7 +1229,7 @@ class HEonGPULibrary:
             restype=ctypes.c_int 
         )
         self._RegularBootstrapping = HEonGPUFunction(
-            self.lib.HEonGPU_CKKS_ArithmeticOperator_GenerateBootstrappingParams,
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_RegularBootstrapping,
             argtypes=[
                 ctypes.POINTER(HE_CKKS_ArithmeticOperator),
                 ctypes.POINTER(HE_CKKS_Ciphertext),
@@ -1178,70 +1245,71 @@ class HEonGPULibrary:
         # Target Depth: { 'taylor_number', 'CtoS_piece', 'StoC_piece', 'less_key_mode' }
         1: {
             'taylor_number': 7, 
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         2: {
             'taylor_number': 7,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         3: {
             'taylor_number': 7,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         4: {
             'taylor_number': 11,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         5: {
             'taylor_number': 11,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         6: {
             'taylor_number': 15,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         7: {
             'taylor_number': 15,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         8: {
             'taylor_number': 15,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         9: {
             'taylor_number': 15, # WARNING: Max recommended value reached
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         },
         10: {
             'taylor_number': 15,
-            'CtoS_piece': 8,
-            'StoC_piece': 8,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
             'less_key_mode': False
         }
     }
-    def NewBootstrapper(self, logPs, length, num_slots):
+    def NewBootstrapper(self, logPs, num_slots):
         #we dont care about the exaxt logPs, or num_slots, just the length. HEonGPU will create the logPs from the parameters given:
-
-
-        config_params = BOOTSTRAP_PRESET_CONFIG[length]
+        
+        print(logPs)
+        length = len(logPs)
+        config_params = self.BOOTSTRAP_PRESET_CONFIG[length]
 
         boot_config = C_BootstrappingConfig(
             CtoS_piece=config_params['CtoS_piece'],
@@ -1266,7 +1334,7 @@ class HEonGPULibrary:
             ctypes.byref(indices_ptr),
             ctypes.byref(count)
         )
-        galois_key_handle = self._CreateGaloisKeyWithIndices(
+        galois_key_handle = self.CreateGaloisKeyWithShifts(
             self.context_handle,
             indices_ptr,
             count

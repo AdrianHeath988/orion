@@ -1,7 +1,7 @@
 comment: Config for LoLA from Figure 3 of https://arxiv.org/pdf/1812.10659
 
 ckks_params: 
-  LogN: 16
+  LogN: 13  #originally 16
   LogQ: [60, 30, 30, 30]
   LogP: [60, 60]
   LogScale: 39
