@@ -369,6 +369,11 @@ class HEonGPULibrary:
             argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
             restype=None
         )
+        self.DeleteCiphertext = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Ciphertext_Delete,
+            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+            restype=None
+        )
 
         self.GetPlaintextScale = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Plaintext_GetScale,
