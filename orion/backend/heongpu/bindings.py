@@ -332,8 +332,8 @@ class HEonGPULibrary:
         
         # Lattigo parameters mapped to HEonGPU
         poly_degree = 1 << orion_params.get_logn() # logn -> n
-        poly_degree = 8192 #originally 8192
-        print(poly_degree)
+        # poly_degree = 8192 #originally 8192
+        print(f"INFO: Using polynomial degree from config: {poly_degree}")
         self.poly_degree = poly_degree
         logq = orion_params.get_logq()             # Bit-lengths of Q primes
         logp = orion_params.get_logp()             # Bit-lengths of P primes
@@ -475,7 +475,9 @@ class HEonGPULibrary:
     
     def GetCiphertextSlots(self, ciphertext_handle):
         if not ciphertext_handle:
-            raise ValueError("Invalid ciphertext handle provided.")
+            if hasattr(self, 'poly_degree'):
+                return self.poly_degree // 2
+            raise ValueError("Invalid ciphertext handle provided and poly_degree not available.")
         ring_size = self.GetCiphertextSize(ciphertext_handle)
         return ring_size // 2
 
@@ -623,8 +625,9 @@ class HEonGPULibrary:
         return self._GenerateRelinearizationKey(self.keygenerator_handle, self.relinkey_handle, self.secretkey_handle, None)
     
     def GenerateEvaluationKeys(self):
-        self.galoiskey_handle = self.CreateGaloisKey(self.context_handle, False)
-        return self.GenerateGaloisKey(self.keygenerator_handle, self.galoiskey_handle, self.secretkey_handle, None)
+        # self.galoiskey_handle = self.CreateGaloisKey(self.context_handle, False)
+        # return self.GenerateGaloisKey(self.keygenerator_handle, self.galoiskey_handle, self.secretkey_handle, None)
+        pass
 
     #encoder
     def setup_encoder(self):
@@ -938,10 +941,19 @@ class HEonGPULibrary:
         newct = self.NewCiphertext(self.context_handle, None)
         return self._Negate(self.arithmeticoperator_handle, ct, newct, None)
     def Rotate(self, ct, slots):
-        return self._Rotate(self.arithmeticoperator_handle, ct, slots, self.galois_handle, None)
+        rotation_amount = slots
+        if rotation_amount not in self.rotation_keys_cache:
+            raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but the required Galois key was not generated.")
+        specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
+        return self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
     def RotateNew(self, ct, slots):
+        rotation_amount = slots
+        if rotation_amount not in self.rotation_keys_cache:
+            raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but the required Galois key was not generated.")
+        specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
         newct = self.NewCiphertext(self.context_handle, None)
-        return self._RotateNew(self.arithmeticoperator_handle, ct, newct, slots, self.galois_handle, None)
+        return self._RotateNew(self.arithmeticoperator_handle, ct, newct, rotation_amount, specific_galois_key_handle, None)
+
     def Rescale(self, ct):
         return self._Rescale(self.arithmeticoperator_handle, ct, None)
     def RescaleNew(self, ct):
@@ -1122,10 +1134,10 @@ class HEonGPULibrary:
             #encode the plaintext diagonal - it must match the rotated ciphertext parameters
             diag_ptxt = self.Encode(diag_coeffs, level=self.GetCiphertextLevel(rotated_ctxt), scale=self.GetCiphertextScale(rotated_ctxt))
             #multiply the rotated ciphertext by the plaintext diagonal
-            term_ctxt = self.MulPlain(rotated_ctxt, diag_ptxt)
+            term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
 
             #running total
-            self.Add_Inplace(accumulator_ctxt, term_ctxt)
+            self.AddCiphertext(accumulator_ctxt, term_ctxt)
 
             #clean up
             self.DeletePlaintext(diag_ptxt)
@@ -1154,15 +1166,26 @@ class HEonGPULibrary:
         return required_rotations
 
     def GenerateLinearTransformRotationKey(self, rotation_step):
-        #Generates a single Galois key for a given rotation and caches
-        galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, [rotation_step])
+        if rotation_step in self.rotation_keys_cache:
+            return
+        num_slots = self.poly_degree // 2
+        normalized_step = rotation_step % num_slots
+        print(f"INFO: Generating Galois key for rotation step: {rotation_step} (normalized to {normalized_step})")
+
+        galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, [normalized_step])
+        if not galois_key_handle:
+            raise RuntimeError(f"Failed to create GaloisKey object for step {rotation_step}")
         status = self.GenerateGaloisKey(
-            self.keygenerator_handle, 
-            galois_key_handle, 
-            self.secretkey_handle, 
+            self.keygenerator_handle,
+            galois_key_handle,
+            self.secretkey_handle,
             None
         )
+        if status != 0:
+            self.DeleteGaloisKey(galois_key_handle)
+            raise RuntimeError(f"HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey failed for step {rotation_step} with status {status}")
         self.rotation_keys_cache[rotation_step] = galois_key_handle
+
 
     def GenerateAndSerializeRotationKey(self, rotation_step):
         #Generates a specific Galois key and returns its serialized byte representation
@@ -1337,7 +1360,6 @@ class HEonGPULibrary:
         galois_key_handle = self.CreateGaloisKeyWithShifts(
             self.context_handle,
             indices_ptr,
-            count
         )
         bootstrapped_ct = self._RegularBootstrapping(
             self.arithmeticoperator_handle,
