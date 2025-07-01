@@ -609,6 +609,24 @@ class HEonGPULibrary:
             [ctypes.POINTER(HE_CKKS_GaloisKey)], 
             None
         )
+        self.StoreGaloisKeyInDevice = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_GaloisKey_StoreInDevice,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_GaloisKey),
+                ctypes.c_void_p  # Corresponds to cudaStream_t, can be None
+            ],
+            restype=None
+        )
+
+        self.StoreGaloisKeyInHost = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_GaloisKey_StoreInHost,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_GaloisKey),
+                ctypes.c_void_p  # Corresponds to cudaStream_t, can be None
+            ],
+            restype=None
+        )
+
 
     def NewKeyGenerator(self):
         self.keygenerator_handle = self._NewKeyGenerator(self.context_handle)
@@ -664,6 +682,11 @@ class HEonGPULibrary:
     def NewEncoder(self):
         self.encoder_handle =  self._NewEncoder(self.context_handle)
     def Encode(self, to_encode, level, scale):
+        slot_count = self.poly_degree # For conjugate invariant ring type
+        vector_size = len(to_encode)
+        print(f"--- Python Encode Debug ---")
+        print(f"  Slot Count Available: {slot_count}")
+        print(f"  Requested Vector Size: {vector_size}")
         pt = self.NewPlaintext(self.context_handle, None)
         return self._Encode(self.encoder_handle, pt, to_encode, scale, None)
   
@@ -950,12 +973,14 @@ class HEonGPULibrary:
         if rotation_amount not in self.rotation_keys_cache:
             raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but the required Galois key was not generated.")
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
+        self.StoreGaloisKeyInDevice(specific_galois_key_handle, None) 
         return self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
     def RotateNew(self, ct, slots):
         rotation_amount = slots
         if rotation_amount not in self.rotation_keys_cache:
             raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but the required Galois key was not generated.")
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
+        self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
         newct = self.NewCiphertext(self.context_handle, None)
         return self._RotateNew(self.arithmeticoperator_handle, ct, newct, rotation_amount, specific_galois_key_handle, None)
 
@@ -963,7 +988,7 @@ class HEonGPULibrary:
         return self._Rescale(self.arithmeticoperator_handle, ct, None)
     def RescaleNew(self, ct):
         newct = self.NewCiphertext(self.context_handle, None)
-        return self._Rescale(self.arithmeticoperator_handle, ct, newct, None)
+        return self._RescaleNew(self.arithmeticoperator_handle, ct, newct, None)
 
     #For scalar operations, we must first encode scalar into a plaintext
     # def SubScalar(self, ct, scalar):
@@ -1177,7 +1202,7 @@ class HEonGPULibrary:
         normalized_step = rotation_step % num_slots
         print(f"INFO: Generating Galois key for rotation step: {rotation_step} (normalized to {normalized_step})")
 
-        galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, [normalized_step])
+        galois_key_handle = self.CreateGaloisKey(self.context_handle, False)
         if not galois_key_handle:
             raise RuntimeError(f"Failed to create GaloisKey object for step {rotation_step}")
         status = self.GenerateGaloisKey(
