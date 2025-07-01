@@ -1200,11 +1200,12 @@ class HEonGPULibrary:
             return
         num_slots = self.poly_degree // 2
         normalized_step = rotation_step % num_slots
-        print(f"INFO: Generating Galois key for rotation step: {rotation_step} (normalized to {normalized_step})")
+        print(f"INFO: Generating Galois key for rotation step {rotation_step} and storing on HOST.")
 
-        galois_key_handle = self.CreateGaloisKey(self.context_handle, False)
+        galois_key_handle = self.CreateGaloisKey(self.context_handle, True)
         if not galois_key_handle:
             raise RuntimeError(f"Failed to create GaloisKey object for step {rotation_step}")
+        #**Crucially, explicitly move the key's internal buffers to the host BEFORE generating data.**
         status = self.GenerateGaloisKey(
             self.keygenerator_handle,
             galois_key_handle,
@@ -1214,7 +1215,9 @@ class HEonGPULibrary:
         if status != 0:
             self.DeleteGaloisKey(galois_key_handle)
             raise RuntimeError(f"HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey failed for step {rotation_step} with status {status}")
+        self.StoreGaloisKeyInHost(galois_key_handle, None) # Using null stream
         self.rotation_keys_cache[rotation_step] = galois_key_handle
+
 
 
     def GenerateAndSerializeRotationKey(self, rotation_step):
