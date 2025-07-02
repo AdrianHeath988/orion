@@ -105,7 +105,23 @@ class HEonGPUFunction:
                     c_args_list.append(c_arg)
                     py_arg_idx += 1
                     c_arg_type_idx += 1
-        
+
+        try:
+            # Format arguments for printing. This handles different ctypes objects gracefully.
+            arg_reprs = []
+            for arg in c_args_list:
+                if hasattr(arg, 'value'):
+                    arg_reprs.append(str(arg.value))
+                elif hasattr(arg, 'contents'):
+                    arg_reprs.append(str(arg))
+                else:
+                    arg_reprs.append(repr(arg))
+            
+            print(f"DEBUG [C Call]: {self.func.__name__}({', '.join(arg_reprs)})")
+        except Exception as e:
+            print(f"DEBUG [C Call]: Error formatting args for {self.func.__name__}: {e}")
+
+
         c_result = self.func(*c_args_list)
         py_result = self.convert_from_ctypes(c_result, self.func.restype)
         
@@ -280,6 +296,11 @@ class HEonGPULibrary:
             argtypes=[ctypes.POINTER(HE_CKKS_Context), ctypes.c_size_t],
             restype=None
         )
+        self.HEonGPU_CKKS_Context_GetPolyModulusDegree = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Context_GetPolyModulusDegree,
+            argtypes=[ctypes.POINTER(HE_CKKS_Context)],
+            restype=ctypes.c_size_t
+        )
 
 
 
@@ -330,38 +351,41 @@ class HEonGPULibrary:
         keyswitch_method = 1 
         sec_level = 128
         
-        # Lattigo parameters mapped to HEonGPU
-        poly_degree = 1 << orion_params.get_logn() # logn -> n
-        # poly_degree = 8192 #originally 8192
-        print(f"INFO: Using polynomial degree from config: {poly_degree}")
-        self.poly_degree = poly_degree
-        logq = orion_params.get_logq()             # Bit-lengths of Q primes
-        logp = orion_params.get_logp()             # Bit-lengths of P primes
-        # Unable to set scale directly in heongpu context, it's set in the encoder instead by user input
-        scale = 1 << orion_params.get_logscale()   # logscale -> scale
-        self.scale  = scale
-        
         context_handle = self.HEonGPU_CKKS_Context_Create(keyswitch_method, sec_level)
         if not context_handle:
-            raise RuntimeError("Failed to create HEonGPU CKKS Context.")
+            raise RuntimeError("Failed to create HEonGPU CKKS Context shell.")
 
+        poly_degree = 1 << orion_params.get_logn()
+        self.poly_degree = poly_degree 
+        logq = orion_params.get_logq()
+        logp = orion_params.get_logp()
+        self.scale = 1 << orion_params.get_logscale()
+        
+        print(f"INFO: Setting PolyModulusDegree to {poly_degree}")
         self.HEonGPU_CKKS_Context_SetPolyModulusDegree(context_handle, poly_degree)
+
+        print(f"INFO: Setting CoeffModulus with LogQ: {logq} and LogP: {logp}")
         result_modulus = self.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes(context_handle, logq, logp[0:1])
         if result_modulus != 0:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
-            raise RuntimeError("Failed to set HEonGPU coefficient modulus bit-sizes.")
-
-        print("before generation")
-        result = self.HEonGPU_CKKS_Context_Generate(context_handle)
-        if result != 0:
+            raise RuntimeError(f"Failed to set HEonGPU coefficient modulus bit-sizes. Status: {result_modulus}")
+        print("INFO: Generating HEonGPU context with specified parameters...")
+        result_generate = self.HEonGPU_CKKS_Context_Generate(context_handle)
+        if result_generate != 0:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
-            raise RuntimeError("Failed to generate HEonGPU context parameters.")
+            raise RuntimeError(f"Failed to generate HEonGPU context parameters. Status: {result_generate}")
+
+        cpp_poly_degree = self.HEonGPU_CKKS_Context_GetPolyModulusDegree(context_handle)
+        print(f"  Python wrapper's poly_degree: {self.poly_degree}")
+        print(f"  Actual C++ context's poly_degree: {cpp_poly_degree}")
+
         self.HEonGPU_PrintParameters(context_handle)
+        print("INFO: HEonGPU CKKS Context successfully created and configured.")
+        
 
-        print("HEonGPU CKKS Context successfully created and configured.")
-
-        # context handle is required for all subsequent operations
         return context_handle
+
+
     #tensor binds
     def setup_tensor_binds(self):
         self.DeletePlaintext = HEonGPUFunction(
@@ -479,12 +503,11 @@ class HEonGPULibrary:
         return plain_size // 2
     
     def GetCiphertextSlots(self, ciphertext_handle):
-        if not ciphertext_handle:
-            if hasattr(self, 'poly_degree'):
-                return self.poly_degree // 2
-            raise ValueError("Invalid ciphertext handle provided and poly_degree not available.")
-        ring_size = self.GetCiphertextSize(ciphertext_handle)
-        return ring_size // 2
+        # This function now reflects the "Standard" ring type where slots = N/2
+        if hasattr(self, 'poly_degree'):
+            return self.poly_degree // 2
+        raise ValueError("poly_degree not available.")
+
 
     #key generator
     def setup_key_generator(self):
@@ -688,7 +711,11 @@ class HEonGPULibrary:
         print(f"  Slot Count Available: {slot_count}")
         print(f"  Requested Vector Size: {vector_size}")
         pt = self.NewPlaintext(self.context_handle, None)
-        return self._Encode(self.encoder_handle, pt, to_encode, scale, None)
+        status = self._Encode(self.encoder_handle, pt, to_encode, scale, None)
+        if status != 0:
+            raise RuntimeError(f"HEonGPU_CKKS_Encoder_Encode_Double failed with status {status}")
+
+        return pt
   
     #encryptor
     def setup_encryptor(self):
@@ -730,7 +757,11 @@ class HEonGPULibrary:
         #assume 1 global secret key for public key encryption:
         self.decryptor_handle = self._NewDecryptor(self.context_handle, self.secretkey_handle)
     def Encrypt(self, pt):
-        self._Encrypt(self.encryptor_handle, pt, None)
+        new_ciphertext_handle = self._Encrypt(self.encryptor_handle, pt, None)
+        if not new_ciphertext_handle:
+            raise RuntimeError("HEonGPU_CKKS_Encryptor_Encrypt_New failed and returned a null ciphertext pointer.")
+        return new_ciphertext_handle
+
     def Decrypt(self, ct):
         pass
 
@@ -978,11 +1009,15 @@ class HEonGPULibrary:
     def RotateNew(self, ct, slots):
         rotation_amount = slots
         if rotation_amount not in self.rotation_keys_cache:
-            raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but the required Galois key was not generated.")
+            raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but key was not generated.")
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
         self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
-        newct = self.NewCiphertext(self.context_handle, None)
-        return self._RotateNew(self.arithmeticoperator_handle, ct, newct, rotation_amount, specific_galois_key_handle, None)
+        newct_shell = self.NewCiphertext(self.context_handle, None)
+        newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
+        if not newct_result:
+            raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
+        return newct_result
+
 
     def Rescale(self, ct):
         return self._Rescale(self.arithmeticoperator_handle, ct, None)
@@ -1022,12 +1057,20 @@ class HEonGPULibrary:
     def MulPlaintext(self, ct, pt):
         return self._MultiplyPlaintext(self.arithmeticoperator_handle, ct, pt, None)
     def MulPlaintextNew(self, ct, pt):
-        newct = self.NewCiphertext(self.context_handle, None)
-        return self._MultiplyPlaintextNew(self.arithmeticoperator_handle, ct, pt, newct, None)
+        newct_shell = self.NewCiphertext(self.context_handle, None)
+        newct_result = self._MultiplyPlaintextNew(self.arithmeticoperator_handle, ct, pt, newct_shell, None)
+        if not newct_result:
+            raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Multiply_Plain failed and returned a null pointer.")
+        return newct_result
+
     def AddCiphertext(self, ct1, ct2):
         return self._AddCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
     def AddCiphertextNew(self, ct1, ct2):
-        newct = self.NewCiphertext(self.context_handle, None)
+        newct_shell = self.NewCiphertext(self.context_handle, None)
+        newct_result = self._AddCiphertextNew(self.arithmeticoperator_handle, ct1, ct2, newct_shell, None)
+        if not newct_result:
+            raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Add failed and returned a null pointer.")
+        return newct_result
         return self._AddCiphertextNew(self.arithmeticoperator_handle, ct1, ct2, newct, None)
     def SubCiphertext(self, ct1, ct2):
         return self._SubCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
@@ -1152,29 +1195,42 @@ class HEonGPULibrary:
     def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
-        input_scale = self.GetCiphertextScale(ctxt_in_handle)
-        input_level = self.GetCiphertextLevel(ctxt_in_handle)
-        zero_ptxt = self.Encode([0.0] * self.GetCiphertextSlots(ctxt_in_handle), level=input_level, scale=input_scale)
+
+        initial_scale = self.scale
+        initial_level = self.GetCiphertextLevel(ctxt_in_handle)
+        num_slots = self.GetCiphertextSlots(ctxt_in_handle)
+
+        # 1. Create the initial accumulator ciphertext.
+        zero_ptxt = self.Encode([0.0] * num_slots, level=initial_level, scale=initial_scale)
         accumulator_ctxt = self.Encrypt(zero_ptxt)
         self.DeletePlaintext(zero_ptxt)
 
-        #loop through each diagonal, perform Rotate->Mul->Add, and accumulate
+        # --- Start of Final Fix ---
+
+        # 2. Perform the main computation loop with in-place addition.
         for diag_idx, diag_coeffs in diagonals.items():
-            rotated_ctxt = self.Rotate(ctxt_in_handle, diag_idx)
-            #encode the plaintext diagonal - it must match the rotated ciphertext parameters
-            diag_ptxt = self.Encode(diag_coeffs, level=self.GetCiphertextLevel(rotated_ctxt), scale=self.GetCiphertextScale(rotated_ctxt))
-            #multiply the rotated ciphertext by the plaintext diagonal
+            # Create temporary objects for this iteration.
+            rotated_ctxt = self.RotateNew(ctxt_in_handle, diag_idx)
+            diag_ptxt = self.Encode(diag_coeffs, level=self.GetCiphertextLevel(rotated_ctxt), scale=initial_scale)
             term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
 
-            #running total
+            # Perform the addition IN-PLACE. This modifies accumulator_ctxt directly
+            # and avoids the complex create/delete cycle that caused the infinite loop.
             self.AddCiphertext(accumulator_ctxt, term_ctxt)
 
-            #clean up
+            # Immediately delete all temporary objects created in this loop.
             self.DeletePlaintext(diag_ptxt)
             self.DeleteCiphertext(term_ctxt)
             if diag_idx != 0:
                 self.DeleteCiphertext(rotated_ctxt)
+
+        # 3. Return the final, modified accumulator. The calling function will handle its deletion.
         return accumulator_ctxt
+
+
+
+
+
 
     def DeleteLinearTransform(self, transform_id):
         if 0 <= transform_id < len(self.linear_transforms):
@@ -1202,7 +1258,7 @@ class HEonGPULibrary:
         normalized_step = rotation_step % num_slots
         print(f"INFO: Generating Galois key for rotation step {rotation_step} and storing on HOST.")
 
-        galois_key_handle = self.CreateGaloisKey(self.context_handle, True)
+        galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, [normalized_step])
         if not galois_key_handle:
             raise RuntimeError(f"Failed to create GaloisKey object for step {rotation_step}")
         #**Crucially, explicitly move the key's internal buffers to the host BEFORE generating data.**
