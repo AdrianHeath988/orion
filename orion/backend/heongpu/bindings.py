@@ -393,7 +393,7 @@ class HEonGPULibrary:
             argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
             restype=None
         )
-        self.DeleteCiphertext = HEonGPUFunction(
+        self._DeleteCiphertext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Ciphertext_Delete,
             argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
             restype=None
@@ -1195,7 +1195,7 @@ class HEonGPULibrary:
     def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
-
+        
         initial_scale = self.scale
         initial_level = self.GetCiphertextLevel(ctxt_in_handle)
         num_slots = self.GetCiphertextSlots(ctxt_in_handle)
@@ -1205,9 +1205,7 @@ class HEonGPULibrary:
         accumulator_ctxt = self.Encrypt(zero_ptxt)
         self.DeletePlaintext(zero_ptxt)
 
-        # --- Start of Final Fix ---
-
-        # 2. Perform the main computation loop with in-place addition.
+        # 2. Perform the main computation loop with in-place addition and immediate cleanup.
         for diag_idx, diag_coeffs in diagonals.items():
             # Create temporary objects for this iteration.
             rotated_ctxt = self.RotateNew(ctxt_in_handle, diag_idx)
@@ -1217,15 +1215,20 @@ class HEonGPULibrary:
             # Perform the addition IN-PLACE. This modifies accumulator_ctxt directly
             # and avoids the complex create/delete cycle that caused the infinite loop.
             self.AddCiphertext(accumulator_ctxt, term_ctxt)
-
+            
             # Immediately delete all temporary objects created in this loop.
+            # This is safe because they are not used again.
             self.DeletePlaintext(diag_ptxt)
-            self.DeleteCiphertext(term_ctxt)
+            self._DeleteCiphertext(term_ctxt)
             if diag_idx != 0:
-                self.DeleteCiphertext(rotated_ctxt)
+                self._DeleteCiphertext(rotated_ctxt)
 
         # 3. Return the final, modified accumulator. The calling function will handle its deletion.
         return accumulator_ctxt
+        
+
+
+
 
 
 
