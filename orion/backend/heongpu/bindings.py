@@ -1001,22 +1001,55 @@ class HEonGPULibrary:
         return self._Negate(self.arithmeticoperator_handle, ct, newct, None)
     def Rotate(self, ct, slots):
         rotation_amount = slots
+        
+        # Check if the required key exists in the cache.
         if rotation_amount not in self.rotation_keys_cache:
-            raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but the required Galois key was not generated.")
+            # If the key is not found, generate it using our memory-safe method.
+            print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
+            try:
+                self.GenerateLinearTransformRotationKey(rotation_amount)
+            except Exception as e:
+                raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
+
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
-        self.StoreGaloisKeyInDevice(specific_galois_key_handle, None) 
-        return self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
+
+        # --- FINAL FIX ---
+        # Ensure the key is on the device before the operation.
+        self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
+        
+        # Perform the rotation.
+        self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
+        return ct
+
     def RotateNew(self, ct, slots):
         rotation_amount = slots
+        
+        # Check if the required key exists in the cache.
         if rotation_amount not in self.rotation_keys_cache:
-            raise RuntimeError(f"Attempted to rotate by {rotation_amount}, but key was not generated.")
+            # If the key is not found, generate it on the fly.
+            print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
+            try:
+                self.GenerateLinearTransformRotationKey(rotation_amount)
+            except Exception as e:
+                raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
+            
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
+
+        # --- FINAL FIX ---
+        # Ensure the key is on the device before the operation.
         self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
+
         newct_shell = self.NewCiphertext(self.context_handle, None)
+        
+        # Perform the rotation.
         newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
+        
         if not newct_result:
             raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
+            
         return newct_result
+
+
 
 
     def Rescale(self, ct):
@@ -1203,27 +1236,39 @@ class HEonGPULibrary:
         # 1. Create the initial accumulator ciphertext.
         zero_ptxt = self.Encode([0.0] * num_slots, level=initial_level, scale=initial_scale)
         accumulator_ctxt = self.Encrypt(zero_ptxt)
-        self.DeletePlaintext(zero_ptxt)
+        self.DeletePlaintext(zero_ptxt) # This plaintext is no longer needed.
 
-        # 2. Perform the main computation loop with in-place addition and immediate cleanup.
+        # 2. Perform the main computation loop.
         for diag_idx, diag_coeffs in diagonals.items():
             # Create temporary objects for this iteration.
             rotated_ctxt = self.RotateNew(ctxt_in_handle, diag_idx)
             diag_ptxt = self.Encode(diag_coeffs, level=self.GetCiphertextLevel(rotated_ctxt), scale=initial_scale)
-            term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
-
-            # Perform the addition IN-PLACE. This modifies accumulator_ctxt directly
-            # and avoids the complex create/delete cycle that caused the infinite loop.
-            self.AddCiphertext(accumulator_ctxt, term_ctxt)
             
-            # Immediately delete all temporary objects created in this loop.
-            # This is safe because they are not used again.
+            # Check for failures from the previous step.
+            if not rotated_ctxt or not diag_ptxt:
+                raise RuntimeError("Failed to create rotated ciphertext or diagonal plaintext.")
+                
+            term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
+            if not term_ctxt:
+                raise RuntimeError("Failed to multiply rotated ciphertext and diagonal plaintext.")
+
+            # Create a new ciphertext for the sum.
+            new_accumulator_ctxt = self.AddCiphertextNew(accumulator_ctxt, term_ctxt)
+            if not new_accumulator_ctxt:
+                raise RuntimeError("Failed to add term to accumulator.")
+
+            # --- Definitive Memory Management ---
+            # Safely delete the previous accumulator and all temporary objects from this loop.
+            self._DeleteCiphertext(accumulator_ctxt)
             self.DeletePlaintext(diag_ptxt)
             self._DeleteCiphertext(term_ctxt)
             if diag_idx != 0:
                 self._DeleteCiphertext(rotated_ctxt)
 
-        # 3. Return the final, modified accumulator. The calling function will handle its deletion.
+            # Update the accumulator to point to the new sum.
+            accumulator_ctxt = new_accumulator_ctxt
+
+        # 3. Return the final, valid accumulator. The calling function will handle its deletion.
         return accumulator_ctxt
         
 
