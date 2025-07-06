@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from .module import Module, timer
 from ..core import packing
+from orion.backend.python.tensors import CipherTensor
 
 
 class LinearTransform(Module):
@@ -64,15 +65,73 @@ class LinearTransform(Module):
 
     @timer
     def evaluate_transforms(self, x):
-        out = self.scheme.lt_evaluator.evaluate_transforms(self, x)
+        slots = x.shape[0]
+        backend = x.evaluator.backend
 
-        # Hybrid method's output rotations
-        slots = self.scheme.params.get_slots()
-        for i in range(1, self.output_rotations+1):
-            out += out.roll(slots // (2**i))
+        # Create the 'out' ciphertext filled with zeros
+        zero_vector = [0.0] * slots
+        ptxt_zeros = backend.Encode(zero_vector, 0, x.scale())
+        out_handle = backend.CreateCiphertext()
+        out_handle = backend.Encrypt( ptxt_zeros)
+        backend.DeletePlaintext(ptxt_zeros)
 
-        out += self.on_bias_ptxt
+        # Wrap the handle in a new CipherTensor, providing the correct arguments.
+        out = CipherTensor(x.scheme, out_handle, x.shape)
+
+        # Loop over the transform tuples
+        for i, transform_weights in enumerate(self.transform_ids):
+            # Calculate the integer shift amount for the rotation
+            shift_amount = (-2**i) * self.stride[0]
+            rolled_x = x.roll(shift_amount)
+            
+            # Encode the tuple of weights into a plaintext object
+            ptxt_transform = backend.Encode(list(transform_weights), 0, x.scale())
+            
+            # Multiply the ciphertext by the plaintext weights
+            result_handle = x.evaluator.mul_plaintext(rolled_x.values, ptxt_transform, in_place=False)
+            result = CipherTensor(x.scheme, result_handle, x.shape)
+            
+            # --- THIS IS THE KEY FIX ---
+            # Rescale the result in-place to match the level of 'out' before adding.
+            x.evaluator.rescale(result.values, in_place=True)
+            
+            # Add the rescaled result to our accumulator ciphertext
+            out += result
+            
+            # Clean up the intermediate plaintext to free memory
+            backend.DeletePlaintext(ptxt_transform)
+
+        # Add the final convolution roll if necessary
+        if hasattr(self, 'is_conv') and self.is_conv:
+            out = out.roll(slots // (2 * self.reps))
+
         return out
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class Linear(LinearTransform):    
@@ -178,6 +237,8 @@ class Conv2d(LinearTransform):
         self.padding = self._make_tuple(padding)
         self.dilation = self._make_tuple(dilation)
         self.groups = groups
+        self.is_conv = True
+        self.reps = 1
         
         self.weight = nn.Parameter(
             torch.empty(out_channels, in_channels // groups, *self.kernel_size)

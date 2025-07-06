@@ -63,6 +63,11 @@ class ArrayResultUInt64(ctypes.Structure):
 class ArrayResultByte(ctypes.Structure):
     _fields_ = [("Data", ctypes.POINTER(ctypes.c_ubyte)), # (unsigned char *)
                 ("Length", ctypes.c_size_t)]
+class HE_CKKS_Plaintext(ctypes.Structure):
+    _fields_ = [("cpp_plaintext", ctypes.c_void_p)]
+
+# This defines the pointer type that the rest of the code needs to import
+LP_HE_CKKS_Plaintext = ctypes.POINTER(HE_CKKS_Plaintext)
 
 
 class HEonGPUFunction:
@@ -73,59 +78,42 @@ class HEonGPUFunction:
         self.func.restype = restype
 
     def __call__(self, *args):
-        """
-        Handles calling the C function with Python arguments and returning a Python result.
-        """
-        py_args_list = list(args)
-        c_args_list = []
+        # This stateless wrapper correctly handles list-to-C-array conversion.
+        processed_args = []
+        i = 0
+        arg_type_idx = 0
         
-        py_arg_idx = 0
-        c_arg_type_idx = 0
-        
-        if self.func.argtypes:
-            while py_arg_idx < len(py_args_list):
-                current_py_arg = py_args_list[py_arg_idx]
-                current_c_type = self.func.argtypes[c_arg_type_idx]
-                
-                is_pointer_type = isinstance(current_c_type, type(ctypes.POINTER(ctypes.c_void_p)))
-                is_array_like = isinstance(current_py_arg, (list, np.ndarray))
-
-                if is_array_like and is_pointer_type:
-                    if (c_arg_type_idx + 1) >= len(self.func.argtypes) or self.func.argtypes[c_arg_type_idx + 1] is not ctypes.c_size_t:
-                        raise TypeError(f"C function signature is incorrect: Expected c_size_t after pointer for list/array argument, but got something else.")
-                    
-                    c_arg_tuple = self.convert_to_ctypes(current_py_arg, current_c_type)
-                    if c_arg_tuple is None:
-                         raise TypeError(f"Conversion of Python type '{type(current_py_arg)}' to C-type '{current_c_type}' failed and returned None.")
-                    c_args_list.extend(c_arg_tuple)
-                    py_arg_idx += 1
-                    c_arg_type_idx += 2
-                else:
-                    c_arg = self.convert_to_ctypes(current_py_arg, current_c_type)
-                    c_args_list.append(c_arg)
-                    py_arg_idx += 1
-                    c_arg_type_idx += 1
-
-        try:
-            # Format arguments for printing. This handles different ctypes objects gracefully.
-            arg_reprs = []
-            for arg in c_args_list:
-                if hasattr(arg, 'value'):
-                    arg_reprs.append(str(arg.value))
-                elif hasattr(arg, 'contents'):
-                    arg_reprs.append(str(arg))
-                else:
-                    arg_reprs.append(repr(arg))
+        while i < len(args):
+            arg = args[i]
             
-            print(f"DEBUG [C Call]: {self.func.__name__}({', '.join(arg_reprs)})")
-        except Exception as e:
-            print(f"DEBUG [C Call]: Error formatting args for {self.func.__name__}: {e}")
+            # If the argument is a Python list, it needs special handling.
+            if isinstance(arg, list):
+                # The C function needs a pointer and a size.
+                list_len = len(arg)
+                
+                # Get the corresponding ctypes pointer type from the signature.
+                # e.g., POINTER(c_double)
+                c_ptr_type = self.func.argtypes[arg_type_idx]
+                
+                # Get the underlying array type (e.g., c_double)
+                c_array_type = c_ptr_type._type_
+                
+                # Create the C-style array from the Python list.
+                c_array = (c_array_type * list_len)(*arg)
+                
+                processed_args.append(c_array)  # Add the pointer
+                processed_args.append(list_len) # Add the size
+                
+                i += 1
+                arg_type_idx += 2 # Consume two C argtypes (pointer and size)
+            else:
+                # For all other arguments, just pass them through.
+                processed_args.append(arg)
+                i += 1
+                arg_type_idx += 1
 
+        return self.func(*processed_args)
 
-        c_result = self.func(*c_args_list)
-        py_result = self.convert_from_ctypes(c_result, self.func.restype)
-        
-        return py_result
 
     @torch._dynamo.disable
     def convert_to_ctypes(self, arg, typ):
@@ -508,6 +496,8 @@ class HEonGPULibrary:
             return self.poly_degree // 2
         raise ValueError("poly_degree not available.")
 
+    
+
 
     #key generator
     def setup_key_generator(self):
@@ -717,6 +707,14 @@ class HEonGPULibrary:
 
         return pt
   
+    def EncodeSingle(self, scalar, level):
+        # Use the existing Encode function by wrapping the scalar in a list.
+        # The standard Encode function already handles creating and returning the
+        # new plaintext handle.
+        default_scale = 2**40
+        return self.Encode([scalar], level, default_scale)
+
+
     #encryptor
     def setup_encryptor(self):
         self._NewEncryptor = HEonGPUFunction(
@@ -764,6 +762,13 @@ class HEonGPULibrary:
 
     def Decrypt(self, ct):
         pass
+
+    def DeleteScheme(self):
+        pass
+
+    def DeleteBootstrappers(self):
+        pass
+
 
     #evaluator:
     def setup_evaluator(self):
@@ -990,7 +995,8 @@ class HEonGPULibrary:
         )
         
         
-    
+    def CreateCiphertext(self):
+        return self.NewCiphertext(self.context_handle, None)
     def NewEvaluator(self):
         print(self.context_handle)
         print(self.encoder_handle)
@@ -1023,7 +1029,7 @@ class HEonGPULibrary:
 
     def RotateNew(self, ct, slots):
         rotation_amount = slots
-        
+
         # Check if the required key exists in the cache.
         if rotation_amount not in self.rotation_keys_cache:
             # If the key is not found, generate it on the fly.
@@ -1032,22 +1038,22 @@ class HEonGPULibrary:
                 self.GenerateLinearTransformRotationKey(rotation_amount)
             except Exception as e:
                 raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
-            
+
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
 
-        # --- FINAL FIX ---
-        # Ensure the key is on the device before the operation.
+        # **Move the specific key to the device right before use.**
         self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
 
         newct_shell = self.NewCiphertext(self.context_handle, None)
-        
+
         # Perform the rotation.
         newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
-        
+
         if not newct_result:
             raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
-            
+
         return newct_result
+
 
 
 
@@ -1059,23 +1065,57 @@ class HEonGPULibrary:
         return self._RescaleNew(self.arithmeticoperator_handle, ct, newct, None)
 
     #For scalar operations, we must first encode scalar into a plaintext
-    # def SubScalar(self, ct, scalar):
-    #     #Must create plaintext then do sub
+    def SubScalar(self, ct, scalar):
+        pt = self.EncodeSingle(scalar, 0)
+        self.SubPlain(ct, pt)
+        self.DeletePlaintext(pt)
 
-    # def SubScalarNew(self, ct, scalar):
-        
-    # def AddScalar():
-    
-    # def AddScalarNew():
+    def SubScalarNew(self, ct, scalar):
+        pt = self.EncodeSingle(scalar, 0)
+        new_ct = self.SubPlainNew(ct, pt)
+        self.DeletePlaintext(pt)
+        return new_ct
 
-    # def MulScalarInt():
+    def AddScalar(self, ct, scalar):
+        pt = self.EncodeSingle(scalar, 0)
+        self.AddPlain(ct, pt)
+        self.DeletePlaintext(pt)
 
-    # def MulScalarIntNew():
-    
-    # def MulScalarFloat():
+    def AddScalarNew(self, ct, scalar):
+        pt = self.EncodeSingle(scalar, 0)
+        new_ct = self.AddPlainNew(ct, pt)
+        self.DeletePlaintext(pt)
+        return new_ct
 
-    # def MulScalarFloatNew():
-    
+    def MulScalarInt(self, ctxt, scalar):
+        pt = self.EncodeSingle(float(scalar), 0)
+        self.MulPlain(ctxt, pt)
+        self.DeletePlaintext(pt)
+
+    def MulScalarIntNew(self, ctxt, scalar):
+        pt = self.EncodeSingle(float(scalar), 0)
+        new_ct = self.MulPlainNew(ctxt, pt)
+        self.DeletePlaintext(pt)
+        return new_ct
+
+    def MulScalarFloat(self, ct, scalar):
+        pt = self.EncodeSingle(scalar, 0)
+        self.MulPlain(ct, pt)
+        self.DeletePlaintext(pt)
+
+    def MulScalarFloatNew(self, ct, scalar):
+        pt = self.EncodeSingle(scalar, 0)
+        new_ct = self.MulPlainNew(ct, pt)
+        self.DeletePlaintext(pt)
+        return new_ct
+
+
+
+
+
+
+
+
     #these functions should be simple wrappers
     def AddPlaintext(self, ct, pt):
         return self._AddPlaintext(self.arithmeticoperator_handle, ct, pt, None)
@@ -1089,13 +1129,20 @@ class HEonGPULibrary:
         return self._SubPlaintextNew(self.arithmeticoperator_handle, ct, pt, newct, None)
     def MulPlaintext(self, ct, pt):
         return self._MultiplyPlaintext(self.arithmeticoperator_handle, ct, pt, None)
-    def MulPlaintextNew(self, ct, pt):
+    def MulPlainNew(self, ct, pt):
         newct_shell = self.NewCiphertext(self.context_handle, None)
+        print(self.arithmeticoperator_handle)
+        print(ct)
+        print(pt)
+        print(newct_shell)
         newct_result = self._MultiplyPlaintextNew(self.arithmeticoperator_handle, ct, pt, newct_shell, None)
         if not newct_result:
             raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Multiply_Plain failed and returned a null pointer.")
         return newct_result
-
+    
+    def MulPlaintextNew(self, ct, pt):
+        return self.MulPlainNew(ct, pt)
+    
     def AddCiphertext(self, ct1, ct2):
         return self._AddCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
     def AddCiphertextNew(self, ct1, ct2):
@@ -1115,7 +1162,11 @@ class HEonGPULibrary:
         self._MultiplyCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
         self._RelinearizeCiphertext(self.arithmeticoperator_handle, ct1, self.relinkey_handle, None)
     #not currently implemented in HEonGPU wrapper
-    #def MulRelinCiphertextNew():
+    def MulRelinCiphertextNew(self, ctxt0, ctxt1):
+        ctxt_copy = self.CloneCiphertext(ctxt0)
+        self.MulRelinCiphertext(ctxt_copy, ctxt1)
+        return ctxt_copy
+
 
     #setup_poly_evaluator
     def setup_poly_evaluator(self):

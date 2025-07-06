@@ -1,12 +1,15 @@
 import sys
 import math
-
+from orion.backend.heongpu.bindings import LP_HE_CKKS_Plaintext
 class PlainTensor:
     def __init__(self, scheme, ptxt_ids, shape, on_shape=None):
         self.scheme = scheme
         self.backend = scheme.backend
         self.encoder = scheme.encoder
-        
+
+        self.values = ptxt_ids
+
+
         self.ids = [ptxt_ids] if isinstance(ptxt_ids, int) else ptxt_ids
         self.shape = shape 
         self.on_shape = on_shape or shape
@@ -26,19 +29,29 @@ class PlainTensor:
         return str(self.decode())
     
     def mul(self, other, in_place=False):
-        if not isinstance(other, CipherTensor):
-            raise ValueError(f"Multiplication between PlainTensor and "
-                             f"{type(other)} is not supported.")
+        if isinstance(other, CipherTensor):
+            mul_id = self.evaluator.mul(self.values, other.values, in_place)
+            if in_place:
+                return self
+            else:
+                return CipherTensor(self.evaluator, self.encoder, self.encryptor, mul_id, self.shape)
+        elif isinstance(other, (int, float)):
+            mul_id = self.evaluator.mul_scalar(self.values, other, in_place)
+            if in_place:
+                return self
+            else:
+                return CipherTensor(self.evaluator, self.encoder, self.encryptor, mul_id, self.shape)
+        # This is the new logic that handles a raw plaintext object
+        elif isinstance(other, LP_HE_CKKS_Plaintext):
+            mul_id = self.evaluator.mul_plain(self.values, other, in_place)
+            if in_place:
+                return self
+            else:
+                return CipherTensor(self.evaluator, self.encoder, self.encryptor, mul_id, self.shape)
+        else:
+            raise ValueError(f"Multiplication between CipherTensor and "
+                            f"{type(other)} is not supported.")
 
-        mul_ids = []
-        for i in range(len(self.ids)):
-            mul_id = self.evaluator.mul_ciphertext(
-                other.ids[i], self.ids[i], in_place)
-            mul_ids.append(mul_id)
-
-        if in_place:
-            return other
-        return CipherTensor(self.scheme, mul_ids, self.shape, self.on_shape) 
 
     def __mul__(self, other):
         return self.mul(other, in_place=False)     
@@ -86,9 +99,16 @@ class CipherTensor:
         self.evaluator = scheme.evaluator
         self.bootstrapper = scheme.bootstrapper
 
-        self.ids = [ctxt_ids] if isinstance(ctxt_ids, int) else ctxt_ids 
+        self.values = ctxt_ids
+
+        if not isinstance(ctxt_ids, list):
+            self.ids = [ctxt_ids]
+        else:
+            self.ids = ctxt_ids
+            
         self.shape = shape 
         self.on_shape = on_shape or shape
+
 
     def __del__(self):
         if 'sys' in globals() and sys.modules and self.scheme:
@@ -207,13 +227,23 @@ class CipherTensor:
     def __imul__(self, other):
         return self.mul(other, in_place=True)
     
-    def roll(self, amount, in_place=False):
-        rot_ids = []
-        for ctxt in self.ids:
-            rot_id = self.evaluator.rotate(ctxt, amount, in_place)
-            rot_ids.append(rot_id)
+    def roll(self, shift, in_place=False):
+        if not isinstance(shift, int):
+            raise TypeError(f"Roll amount must be an integer, not {type(shift)}")
 
-        return CipherTensor(self.scheme, rot_ids, self.shape, self.on_shape)
+        ctxt_handle = self.values[0] if isinstance(self.values, list) else self.values
+
+        if in_place:
+            self.evaluator.rotate(ctxt_handle, shift, in_place=True)
+            return self
+        else:
+            rot_id = self.evaluator.rotate(ctxt_handle, shift, in_place=False)
+            final_handle = rot_id[0] if isinstance(rot_id, list) else rot_id
+            
+            # This is the corrected constructor call matching your code.
+            return CipherTensor(self.scheme, final_handle, self.shape)
+
+
     
     def _check_valid(self, other):
         return
