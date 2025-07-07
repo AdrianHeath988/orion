@@ -66,53 +66,39 @@ class ArrayResultByte(ctypes.Structure):
 class HE_CKKS_Plaintext(ctypes.Structure):
     _fields_ = [("cpp_plaintext", ctypes.c_void_p)]
 
-# This defines the pointer type that the rest of the code needs to import
-LP_HE_CKKS_Plaintext = ctypes.POINTER(HE_CKKS_Plaintext)
+
 
 
 class HEonGPUFunction:
-    """Helper to wrap ctypes functions with argument and return types."""
-    def __init__(self, func, argtypes, restype):
+    def __init__(self, func, argtypes=None, restype=None):
         self.func = func
-        self.func.argtypes = argtypes 
-        self.func.restype = restype
+        if argtypes:
+            self.func.argtypes = argtypes
+        if restype:
+            self.func.restype = restype
 
     def __call__(self, *args):
-        # This stateless wrapper correctly handles list-to-C-array conversion.
-        processed_args = []
-        i = 0
-        arg_type_idx = 0
-        
-        while i < len(args):
-            arg = args[i]
+        # This is the corrected __call__ method, modeled on the Lattigo wrapper.
+        c_args = []
+        for arg in args:
+            # This is the key: get the current C argtype based on the length
+            # of the c_args list, which has already been processed.
+            curr_argtype = self.func.argtypes[len(c_args)]
             
-            # If the argument is a Python list, it needs special handling.
-            if isinstance(arg, list):
-                # The C function needs a pointer and a size.
-                list_len = len(arg)
-                
-                # Get the corresponding ctypes pointer type from the signature.
-                # e.g., POINTER(c_double)
-                c_ptr_type = self.func.argtypes[arg_type_idx]
-                
-                # Get the underlying array type (e.g., c_double)
-                c_array_type = c_ptr_type._type_
-                
-                # Create the C-style array from the Python list.
-                c_array = (c_array_type * list_len)(*arg)
-                
-                processed_args.append(c_array)  # Add the pointer
-                processed_args.append(list_len) # Add the size
-                
-                i += 1
-                arg_type_idx += 2 # Consume two C argtypes (pointer and size)
+            # Call the existing helper function to convert the Python arg.
+            c_arg = self.convert_to_ctypes(arg, curr_argtype)
+            
+            # If the helper returned a (pointer, size) tuple, add both to the list.
+            if isinstance(c_arg, tuple):
+                c_args.extend(c_arg)
             else:
-                # For all other arguments, just pass them through.
-                processed_args.append(arg)
-                i += 1
-                arg_type_idx += 1
+                # Otherwise, just add the single converted argument.
+                c_args.append(c_arg)
+                
+        # Call the C function with the fully processed list of arguments.
+        return self.func(*c_args)
 
-        return self.func(*processed_args)
+
 
 
     @torch._dynamo.disable
@@ -462,7 +448,25 @@ class HEonGPULibrary:
             ],
             restype=ctypes.c_size_t
         )
+        self._CopyCiphertext = self.lib.HEonGPU_CKKS_Ciphertext_Assign_Copy
+        self._CopyCiphertext.argtypes = [
+            ctypes.POINTER(HE_CKKS_Ciphertext), # Destination
+            ctypes.POINTER(HE_CKKS_Ciphertext)  # Source
+        ]
+        self._CopyCiphertext.restype = ctypes.c_int
     
+    def CloneCiphertext(self, ctxt_in):
+        # Creates a new ciphertext that is a copy of the input.
+        ctxt_out = self.CreateCiphertext()
+        
+        # Call the C++ copy function and check the return status
+        status = self._CopyCiphertext(ctxt_out, ctxt_in)
+        if status != 0:
+            raise RuntimeError(f"HEonGPU_CKKS_Ciphertext_Assign_Copy failed with status code {status}")
+        
+        return ctxt_out
+
+
     def GetModuliChain(self):
         required_size = self._GetModuliChain(
             self.context_handle,
@@ -640,7 +644,7 @@ class HEonGPULibrary:
             restype=None
         )
 
-
+    
     def NewKeyGenerator(self):
         self.keygenerator_handle = self._NewKeyGenerator(self.context_handle)
         return self.keygenerator_handle
@@ -835,7 +839,7 @@ class HEonGPULibrary:
         )   
 
         self._Rescale = HEonGPUFunction(
-            self.lib.HEonGPU_CKKS_ArithmeticOperator_ModDrop_Ciphertext_Inplace,
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_Rescale_Inplace,
             argtypes=[
                 ctypes.POINTER(HE_CKKS_ArithmeticOperator),
                 ctypes.POINTER(HE_CKKS_Ciphertext),
@@ -844,16 +848,16 @@ class HEonGPULibrary:
             restype=None
         )
 
-        self._RescaleNew = HEonGPUFunction(
-            self.lib.HEonGPU_CKKS_ArithmeticOperator_ModDrop_Ciphertext,
-            argtypes=[
-                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
-                ctypes.POINTER(HE_CKKS_Ciphertext),
-                ctypes.POINTER(HE_CKKS_Ciphertext),
-                ctypes.POINTER(C_ExecutionOptions)
-                ],
-            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
-        )
+        # self._RescaleNew = HEonGPUFunction(
+        #     self.lib.HEonGPU_CKKS_ArithmeticOperator_ModDrop_Ciphertext,
+        #     argtypes=[
+        #         ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+        #         ctypes.POINTER(HE_CKKS_Ciphertext),
+        #         ctypes.POINTER(HE_CKKS_Ciphertext),
+        #         ctypes.POINTER(C_ExecutionOptions)
+        #         ],
+        #     restype=ctypes.POINTER(HE_CKKS_Ciphertext)
+        # )
 
         self._SubPlaintext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_ArithmeticOperator_Sub_Plain_Inplace,
@@ -1059,7 +1063,10 @@ class HEonGPULibrary:
 
 
     def Rescale(self, ct):
-        return self._Rescale(self.arithmeticoperator_handle, ct, None)
+        print("[DEBUG] IN bindings.py Rescale")
+        print(ct)
+        self._Rescale(self.arithmeticoperator_handle, ct, None)
+        return ct
     def RescaleNew(self, ct):
         newct = self.NewCiphertext(self.context_handle, None)
         return self._RescaleNew(self.arithmeticoperator_handle, ct, newct, None)

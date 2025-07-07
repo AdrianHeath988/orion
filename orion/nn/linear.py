@@ -67,45 +67,74 @@ class LinearTransform(Module):
     def evaluate_transforms(self, x):
         slots = x.shape[0]
         backend = x.evaluator.backend
+        print("\n--- [DEBUG] Entering evaluate_transforms ---")
 
-        # Create the 'out' ciphertext filled with zeros
-        zero_vector = [0.0] * slots
-        ptxt_zeros = backend.Encode(zero_vector, 0, x.scale())
-        out_handle = backend.CreateCiphertext()
-        out_handle = backend.Encrypt( ptxt_zeros)
-        backend.DeletePlaintext(ptxt_zeros)
+        # A list to hold the intermediate ciphertext results
+        results_list = []
+        print(f"[DEBUG] Created empty results_list.")
 
-        # Wrap the handle in a new CipherTensor, providing the correct arguments.
-        out = CipherTensor(x.scheme, out_handle, x.shape)
-
-        # Loop over the transform tuples
+        # Loop over the transform tuples to generate all the products
+        print(f"[DEBUG] Starting loop to generate {len(self.transform_ids)} products...")
         for i, transform_weights in enumerate(self.transform_ids):
-            # Calculate the integer shift amount for the rotation
+            print(f"\n[DEBUG] Loop iteration {i}:")
+            
             shift_amount = (-2**i) * self.stride[0]
+            print(f"[DEBUG]   - Rolling x by {shift_amount}")
             rolled_x = x.roll(shift_amount)
             
-            # Encode the tuple of weights into a plaintext object
+            print(f"[DEBUG]   - Encoding transform weights")
             ptxt_transform = backend.Encode(list(transform_weights), 0, x.scale())
             
-            # Multiply the ciphertext by the plaintext weights
+            print(f"[DEBUG]   - Multiplying rolled_x by ptxt_transform")
             result_handle = x.evaluator.mul_plaintext(rolled_x.values, ptxt_transform, in_place=False)
-            result = CipherTensor(x.scheme, result_handle, x.shape)
             
-            # --- THIS IS THE KEY FIX ---
-            # Rescale the result in-place to match the level of 'out' before adding.
-            x.evaluator.rescale(result.values, in_place=True)
+            print(f"[DEBUG]   - Appending result_handle to list: {result_handle}")
+            results_list.append(result_handle)
             
-            # Add the rescaled result to our accumulator ciphertext
-            out += result
-            
-            # Clean up the intermediate plaintext to free memory
             backend.DeletePlaintext(ptxt_transform)
+        print(f"[DEBUG] Finished product generation loop.")
 
-        # Add the final convolution roll if necessary
+        # --- Sum all the results in the list at the end ---
+        print(f"\n[DEBUG] Starting summation of {len(results_list)} results...")
+        
+        out_handle = results_list[0]
+        print(f"[DEBUG]   - Initial accumulator 'out_handle' set to first result: {out_handle}")
+        
+        for i in range(1, len(results_list)):
+            print(f"[DEBUG]   - Adding result {i} to accumulator...")
+            backend.Add(out_handle, results_list[i])
+            backend.DeleteCiphertext(results_list[i])
+            print(f"[DEBUG]   - Addition successful.")
+        print(f"[DEBUG] Finished summation loop.")
+        
+
+        print(f"[DEBUG]   -  accumulator 'out_handle' set to result: {out_handle}")
+        print("\n[DEBUG] Performing FIRST rescale...")
+        x.evaluator.rescale(out_handle, in_place=True)
+        print("[DEBUG] FIRST rescale successful.")
+
+        print("[DEBUG] Performing SECOND rescale...")
+        x.evaluator.rescale(out_handle, in_place=True)
+        print("[DEBUG] SECOND rescale successful.")
+
+        # Wrap the final, valid handle in a CipherTensor
+        print(f"[DEBUG] Wrapping final handle in CipherTensor.")
+        out = CipherTensor(x.scheme, out_handle, x.shape)
+
+        # Perform the final roll if necessary
         if hasattr(self, 'is_conv') and self.is_conv:
-            out = out.roll(slots // (2 * self.reps))
+            roll_amount = slots // (2 * self.reps)
+            print(f"\n[DEBUG] Performing final roll with amount: {roll_amount}")
+            out = out.roll(roll_amount)
+            print(f"[DEBUG] Final roll successful.")
 
+        print("--- [DEBUG] Exiting evaluate_transforms ---")
         return out
+
+
+
+
+
 
 
 

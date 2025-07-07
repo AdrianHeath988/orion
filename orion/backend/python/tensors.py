@@ -1,6 +1,5 @@
 import sys
 import math
-from orion.backend.heongpu.bindings import LP_HE_CKKS_Plaintext
 class PlainTensor:
     def __init__(self, scheme, ptxt_ids, shape, on_shape=None):
         self.scheme = scheme
@@ -42,7 +41,7 @@ class PlainTensor:
             else:
                 return CipherTensor(self.evaluator, self.encoder, self.encryptor, mul_id, self.shape)
         # This is the new logic that handles a raw plaintext object
-        elif isinstance(other, LP_HE_CKKS_Plaintext):
+        elif isinstance(other, ctypes.POINTER(HE_CKKS_Ciphertext)):
             mul_id = self.evaluator.mul_plain(self.values, other, in_place)
             if in_place:
                 return self

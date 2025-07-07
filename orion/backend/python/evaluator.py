@@ -78,6 +78,7 @@ class NewEvaluator:
         return self.backend.Rescale(ct_out)
     
     def rescale(self, ctxt, in_place):
+        ctxt = ctxt[0] if isinstance(ctxt, list) else ctxt
         if in_place:
             return self.backend.Rescale(ctxt)
         return self.backend.RescaleNew(ctxt)
