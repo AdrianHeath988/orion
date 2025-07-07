@@ -5,6 +5,7 @@ import platform
 import torch
 import numpy as np
 import hashlib
+from orion.backend.python.tensors import CipherTensor
 
 class HE_CKKS_Context(ctypes.Structure): pass
 class HE_CKKS_Plaintext(ctypes.Structure): pass
@@ -334,7 +335,7 @@ class HEonGPULibrary:
         logq = orion_params.get_logq()
         logp = orion_params.get_logp()
         self.scale = 1 << orion_params.get_logscale()
-        
+        self.q_size = len(logq)
         print(f"INFO: Setting PolyModulusDegree to {poly_degree}")
         self.HEonGPU_CKKS_Context_SetPolyModulusDegree(context_handle, poly_degree)
 
@@ -408,11 +409,11 @@ class HEonGPULibrary:
         # "Level" corresponds to the number of remaining prime moduli in the chain.
         # However, plaintext in HEonGPU stores depth (number of prime moduli consumed).
         # Need to think on how to resolvbe this.
-        # self.GetPlaintextLevel = HEonGPUFunction(
-        #     self.lib.HEonGPU_CKKS_Plaintext_GetDepth,
-        #     argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
-        #     restype=ctypes.c_int
-        # )
+        self.GetPlaintextDepth = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Plaintext_GetDepth,
+            argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
+            restype=ctypes.c_int
+        )
 
         self.GetCiphertextLevel = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Ciphertext_GetCoeffModulusCount, # Assumes this C API function exists
@@ -997,8 +998,21 @@ class HEonGPULibrary:
                 ],
             restype=None
         )
+        self._ModDropPlaintext = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_ModDrop_Plaintext_Inplace,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Plaintext),
+                ctypes.POINTER(C_ExecutionOptions)
+            ],
+            restype=None  # The C++ function returns void
+        )
+
+
         
-        
+    def ModDropPlaintext(self, ptxt):
+        # This calls the in-place mod drop for plaintexts
+        self._ModDropPlaintext(self.arithmeticoperator_handle, ptxt, None)
     def CreateCiphertext(self):
         return self.NewCiphertext(self.context_handle, None)
     def NewEvaluator(self):
@@ -1063,9 +1077,14 @@ class HEonGPULibrary:
 
 
     def Rescale(self, ct):
-        print("[DEBUG] IN bindings.py Rescale")
-        print(ct)
+        ct = ct.values if isinstance(ct, CipherTensor) else ct
+
+        print(f"[DEBUG] In bindings.py Rescale, address of ct: {id(ct)}")
+        print(f"[DEBUG] In bindings.py Rescale, object is: {object.__repr__(ct)}")
+
         self._Rescale(self.arithmeticoperator_handle, ct, None)
+        if not ct:
+            raise RuntimeError(f"The C++ Rescale_Inplace operation failed.")
         return ct
     def RescaleNew(self, ct):
         newct = self.NewCiphertext(self.context_handle, None)
@@ -1074,48 +1093,56 @@ class HEonGPULibrary:
     #For scalar operations, we must first encode scalar into a plaintext
     def SubScalar(self, ct, scalar):
         pt = self.EncodeSingle(scalar, 0)
-        self.SubPlain(ct, pt)
+        self.SubPlaintext(ct, pt)
         self.DeletePlaintext(pt)
 
     def SubScalarNew(self, ct, scalar):
         pt = self.EncodeSingle(scalar, 0)
-        new_ct = self.SubPlainNew(ct, pt)
+        new_ct = self.SubPlaintextNew(ct, pt)
         self.DeletePlaintext(pt)
         return new_ct
 
     def AddScalar(self, ct, scalar):
+        print("[DEBUG] in AddScalar")
+        current_modulus_count = self.GetCiphertextLevel(ct)
+        ct_depth = self.q_size - current_modulus_count
         pt = self.EncodeSingle(scalar, 0)
-        self.AddPlain(ct, pt)
+        if ct_depth > 0:
+            print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
+            for _ in range(ct_depth):
+                self.ModDropPlaintext(pt)
+        self.AddPlaintext(ct, pt)
+        
         self.DeletePlaintext(pt)
+
 
     def AddScalarNew(self, ct, scalar):
         pt = self.EncodeSingle(scalar, 0)
-        new_ct = self.AddPlainNew(ct, pt)
+        new_ct = self.AddPlaintextNew(ct, pt)
         self.DeletePlaintext(pt)
         return new_ct
 
     def MulScalarInt(self, ctxt, scalar):
         pt = self.EncodeSingle(float(scalar), 0)
-        self.MulPlain(ctxt, pt)
+        self.MulPlaintext(ctxt, pt)
         self.DeletePlaintext(pt)
 
     def MulScalarIntNew(self, ctxt, scalar):
         pt = self.EncodeSingle(float(scalar), 0)
-        new_ct = self.MulPlainNew(ctxt, pt)
+        new_ct = self.MulPlaintextNew(ctxt, pt)
         self.DeletePlaintext(pt)
         return new_ct
 
     def MulScalarFloat(self, ct, scalar):
         pt = self.EncodeSingle(scalar, 0)
-        self.MulPlain(ct, pt)
+        self.MulPlaintext(ct, pt)
         self.DeletePlaintext(pt)
 
     def MulScalarFloatNew(self, ct, scalar):
         pt = self.EncodeSingle(scalar, 0)
-        new_ct = self.MulPlainNew(ct, pt)
+        new_ct = self.MulPlaintextNew(ct, pt)
         self.DeletePlaintext(pt)
         return new_ct
-
 
 
 
@@ -1125,7 +1152,33 @@ class HEonGPULibrary:
 
     #these functions should be simple wrappers
     def AddPlaintext(self, ct, pt):
+        # --- Start Debug Block ---
+        print("\n--- [DEBUG] Entering AddPlaintext ---")
+        current_modulus_count = self.GetCiphertextLevel(ct)
+        ct_depth = self.q_size - current_modulus_count
+        pt_depth = self.GetPlaintextDepth(pt)
+        print(f"ct_depth is {ct_depth} and pt_depth is {pt_depth}")
+        if ct_depth > pt_depth:
+            print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
+            for _ in range(ct_depth - pt_depth):
+                self.ModDropPlaintext(pt)
+        # Use the getter functions to get the level/depth of each object
+        ct_level = self.GetCiphertextLevel(ct)
+        pt_depth = self.GetPlaintextDepth(pt)
+        
+        # Print the levels for comparison
+        print(f"    Ciphertext Level (remaining moduli): {ct_level}")
+        print(f"    Plaintext Depth (consumed moduli): {pt_depth}")
+        
+        
+
+        print("--- [DEBUG] Calling backend _AddPlaintext ---")
+        # --- End Debug Block ---
+
+        # Call the original function
         return self._AddPlaintext(self.arithmeticoperator_handle, ct, pt, None)
+
+
     def AddPlaintextNew(self, ct, pt):
         newct = self.NewCiphertext(self.context_handle, None)
         return self._AddPlaintextNew(self.arithmeticoperator_handle, ct, pt, newct, None)
@@ -1544,6 +1597,7 @@ class HEonGPULibrary:
         )
 
     def Bootstrap(self, ct, num_slots):
+        print("[DEBUG] Bootsrapping!")
         indices_ptr = ctypes.POINTER(ctypes.c_int)()
         count = ctypes.c_size_t()
         
@@ -1555,6 +1609,7 @@ class HEonGPULibrary:
         galois_key_handle = self.CreateGaloisKeyWithShifts(
             self.context_handle,
             indices_ptr,
+            count
         )
         bootstrapped_ct = self._RegularBootstrapping(
             self.arithmeticoperator_handle,
@@ -1563,6 +1618,7 @@ class HEonGPULibrary:
             self.relinkey_handle,
             None 
         )
+        print("[DEBUG] Finished Bootstrapping!")
 
     
     

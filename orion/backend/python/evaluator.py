@@ -56,7 +56,7 @@ class NewEvaluator:
             ct_out = self.backend.MulPlaintext(ctxt, ptxt)
         else:
             ct_out = self.backend.MulPlaintextNew(ctxt, ptxt) 
-        
+        print(f"[DEBUG] In evaluator.py mul_plaintext, address of ct: {id(ct_out)}")
         return self.backend.Rescale(ct_out)
 
     def add_ciphertext(self, ctxt0, ctxt1, in_place):

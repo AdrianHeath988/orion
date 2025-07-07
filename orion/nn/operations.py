@@ -73,8 +73,13 @@ class Bootstrap(Module):
         # sparse bootstrapping (i.e., where slots < N/2).
         if self.constant != 0:
             x += self.constant
+        if x is None:
+            raise ValueError("[DEBUG] FATAL ERROR: The input ciphertext 'x' is null.")
+        print(f"[DEBUG] In operations.py forward, object is: {object.__repr__(x)}")
+        print(f"[DEBUG] In operations.py forward, address of x: {id(x)}")
+
         x *= self.prescale_ptxt
- 
+        print(f"[DEBUG] In operations.py forward (2), address of x: {id(x)}")
         x = x.bootstrap()
 
         # Scale and shift back to the original range

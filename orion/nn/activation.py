@@ -70,7 +70,7 @@ class Quad(Module):
             # --- End Debug Block ---
 
             # This is the corrected rescale logic
-            x.evaluator.rescale(out.values, in_place=True)
+            # x.evaluator.rescale(out.values, in_place=True)
         print(f"\n--- [DEBUG] Returning From Quad.forward --")
         return out
 
