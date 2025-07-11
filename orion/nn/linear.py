@@ -65,71 +65,16 @@ class LinearTransform(Module):
 
     @timer
     def evaluate_transforms(self, x):
-        slots = x.shape[0]
-        backend = x.evaluator.backend
-        print("\n--- [DEBUG] Entering evaluate_transforms ---")
+        out = self.scheme.lt_evaluator.evaluate_transforms(self, x)
 
-        # A list to hold the intermediate ciphertext results
-        results_list = []
-        print(f"[DEBUG] Created empty results_list.")
+        # Hybrid method's output rotations
+        slots = self.scheme.params.get_slots()
+        for i in range(1, self.output_rotations+1):
+            out += out.roll(slots // (2**i))
 
-        # Loop over the transform tuples to generate all the products
-        print(f"[DEBUG] Starting loop to generate {len(self.transform_ids)} products...")
-        for i, transform_weights in enumerate(self.transform_ids):
-            print(f"\n[DEBUG] Loop iteration {i}:")
-            
-            shift_amount = (-2**i) * self.stride[0]
-            print(f"[DEBUG]   - Rolling x by {shift_amount}")
-            rolled_x = x.roll(shift_amount)
-            
-            print(f"[DEBUG]   - Encoding transform weights")
-            ptxt_transform = backend.Encode(list(transform_weights), 0, x.scale())
-            
-            print(f"[DEBUG]   - Multiplying rolled_x by ptxt_transform")
-            result_handle = x.evaluator.mul_plaintext(rolled_x.values, ptxt_transform, in_place=False)
-            
-            print(f"[DEBUG]   - Appending result_handle to list: {result_handle}")
-            results_list.append(result_handle)
-            
-            backend.DeletePlaintext(ptxt_transform)
-        print(f"[DEBUG] Finished product generation loop.")
-
-        # --- Sum all the results in the list at the end ---
-        print(f"\n[DEBUG] Starting summation of {len(results_list)} results...")
-        
-        out_handle = results_list[0]
-        print(f"[DEBUG]   - Initial accumulator 'out_handle' set to first result: {out_handle}")
-        
-        for i in range(1, len(results_list)):
-            print(f"[DEBUG]   - Adding result {i} to accumulator...")
-            backend.Add(out_handle, results_list[i])
-            backend.DeleteCiphertext(results_list[i])
-            print(f"[DEBUG]   - Addition successful.")
-        print(f"[DEBUG] Finished summation loop.")
-        
-
-        print(f"[DEBUG]   -  accumulator 'out_handle' set to result: {out_handle}")
-        print("\n[DEBUG] Performing FIRST rescale...")
-        x.evaluator.rescale(out_handle, in_place=True)
-        print("[DEBUG] FIRST rescale successful.")
-
-        print("[DEBUG] Performing SECOND rescale...")
-        x.evaluator.rescale(out_handle, in_place=True)
-        print("[DEBUG] SECOND rescale successful.")
-
-        # Wrap the final, valid handle in a CipherTensor
-        print(f"[DEBUG] Wrapping final handle in CipherTensor.")
-        out = CipherTensor(x.scheme, out_handle, x.shape)
-
-        # Perform the final roll if necessary
-        if hasattr(self, 'is_conv') and self.is_conv:
-            roll_amount = slots // (2 * self.reps)
-            print(f"\n[DEBUG] Performing final roll with amount: {roll_amount}")
-            out = out.roll(roll_amount)
-            print(f"[DEBUG] Final roll successful.")
-
-        print("--- [DEBUG] Exiting evaluate_transforms ---")
+        out += self.on_bias_ptxt
         return out
+
 
 
 
@@ -230,14 +175,14 @@ class Linear(LinearTransform):
                     f"Expected input to {self.__class__.__name__} to have "
                     f"2 dimensions (N, in_features), but got {x.dim()} " 
                     f"dimension(s): {x.shape}." + extra
-        )
+                )
             
             # If we're not in FHE inference mode, then we'll just return
             # the default PyTorch result.
             return torch.nn.functional.linear(x, self.weight, self.bias)
-        
+        print(f"X IS {type(x)}")
         # Otherwise, call parent evaluation for FHE.
-        return self.evaluate_transforms(x) 
+        return self.evaluate_transforms(x)    #TODO: Change back to self.evaluate_transforms(x)
 
 
 class Conv2d(LinearTransform):    

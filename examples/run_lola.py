@@ -33,19 +33,25 @@ out_clear = net(inp)
 # of possible input values. We'll determine these ranges by aggregating
 # statistics from the training set and applying a tolerance factor = margin.
 orion.fit(net, trainloader)
+print("\nStarting Compiling", flush=True)
 input_level = orion.compile(net)
 
 # Encode and encrypt the input vector 
+print("\nStarting Encoding", flush=True)
 vec_ptxt = orion.encode(inp, input_level)
+print("\nStarting Encrypting", flush=True)
 vec_ctxt = orion.encrypt(vec_ptxt)
+print("\nStarting net.he", flush=True)
 net.he()  # Switch to FHE mode
 
 # Run FHE inference
 print("\nStarting FHE inference", flush=True)
 start = time.time()
 out_ctxt = net(vec_ctxt)
-end = time.time()
 
+
+end = time.time()
+print("\Finished FHE inference", flush=True)
 # Get the FHE results and decrypt + decode.
 out_ptxt = out_ctxt.decrypt()
 out_fhe = out_ptxt.decode()
@@ -59,3 +65,4 @@ dist = mae(out_clear, out_fhe)
 print(f"\nMAE: {dist:.4f}")
 print(f"Precision: {-math.log2(dist):.4f}")
 print(f"Runtime: {end-start:.4f} secs.\n")
+print(f"[DEBUG] FINISHED Example")

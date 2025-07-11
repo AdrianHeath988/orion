@@ -223,6 +223,21 @@ class CipherTensor:
     def __mul__(self, other):
         return self.mul(other, in_place=False)     
 
+    def mod_drop(self, in_place=True):
+        if not in_place:
+             # Create a clone for out-of-place operation
+            new_ids = [self.backend.CloneCiphertext(cid) for cid in self.ids]
+            new_tensor = CipherTensor(self.scheme, new_ids, self.shape, self.on_shape)
+            for cid in new_tensor.ids:
+                self.evaluator.mod_drop(cid, in_place=True) # in-place on the clone
+            return new_tensor
+        else:
+            # In-place operation on the current tensor
+            for cid in self.ids:
+                self.evaluator.mod_drop(cid, in_place=True)
+            return self
+
+
     def __imul__(self, other):
         return self.mul(other, in_place=True)
     

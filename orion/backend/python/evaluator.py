@@ -27,6 +27,20 @@ class NewEvaluator:
             return self.backend.SubScalar(ctxt, float(scalar))
         return self.backend.SubScalarNew(ctxt, float(scalar))
 
+    def mod_drop(self, ctxt, in_place=True):
+        if not in_place:
+            raise NotImplementedError("Out-of-place mod_drop is not supported.")
+        
+        ctxt_handle = ctxt 
+        
+        self.backend._ModDropCiphertext(
+            self.backend.arithmeticoperator_handle, 
+            ctxt_handle, 
+            None
+        )
+        return ctxt
+
+
     def mul_scalar(self, ctxt, scalar, in_place):
         if isinstance(scalar, float) and scalar.is_integer():
             scalar = int(scalar)  # (e.g., 1.00 -> 1)

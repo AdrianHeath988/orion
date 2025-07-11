@@ -19,9 +19,13 @@ class LoLA(on.Module):
         self.flatten = on.Flatten()
 
     def forward(self, x): 
+        print("[DEBUG] forward act 1")
         x = self.act1(self.bn1(self.conv1(x)))
+        print("[DEBUG] forward flatten")
         x = self.flatten(x)
+        print("[DEBUG] forward act 2")
         x = self.act2(self.bn2(self.fc1(x)))
+        print("[DEBUG] forward finished")
         return self.fc2(x)
  
 

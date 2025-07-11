@@ -432,6 +432,11 @@ class HEonGPULibrary:
             argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
             restype=ctypes.c_int
         )
+        self.GetCiphertextDepth = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Ciphertext_GetDepth,
+            argtypes=[ctypes.POINTER(HE_CKKS_Ciphertext)],
+            restype=ctypes.c_int
+        )
 
 
         self.GetCiphertextDegree = HEonGPUFunction(
@@ -690,12 +695,18 @@ class HEonGPULibrary:
             ],
             restype=ctypes.c_int
         )
-        #TODO: Determine what the argtypes of decode mean, and add wrapper function
-        self.Decode = HEonGPUFunction(
+        self._Decode = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Encoder_Decode_Double,
-            argtypes=[ctypes.c_int],
-            restype=ArrayResultFloat,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Encoder),   # encoder
+                ctypes.POINTER(HE_CKKS_Plaintext), # pt
+                ctypes.POINTER(ctypes.c_double),   # message_buffer (output)
+                ctypes.c_size_t,                   # buffer_len
+                ctypes.POINTER(C_ExecutionOptions)   # c_options
+            ],
+            restype=ctypes.c_int # Returns the number of elements copied
         )
+
 
     def NewEncoder(self):
         self.encoder_handle =  self._NewEncoder(self.context_handle)
@@ -719,6 +730,35 @@ class HEonGPULibrary:
         default_scale = 2**40
         return self.Encode([scalar], level, default_scale)
 
+    def Decode(self, pt):
+        num_slots = self.poly_degree // 2
+        if not self.encoder_handle:
+            raise RuntimeError("Encoder has not been initialized.")
+        if not pt:
+            raise ValueError("Input plaintext handle cannot be null.")
+        buffer_len = num_slots
+        message_buffer = (ctypes.c_double * buffer_len)()
+        elements_copied = self._Decode(
+            self.encoder_handle,
+            pt,
+            message_buffer,
+            buffer_len,
+            None  # Assuming default execution options
+        )
+
+        if elements_copied < 0:
+            raise RuntimeError(f"The C++ Decode operation failed with error code: {elements_copied}")
+
+        # 4. Convert the ctypes array into a Python list and return it.
+        # We slice it to the number of elements that were actually copied.
+        return list(message_buffer[:elements_copied])
+
+
+
+
+
+
+
 
     #encryptor
     def setup_encryptor(self):
@@ -733,7 +773,7 @@ class HEonGPULibrary:
             self.lib.HEonGPU_CKKS_Decryptor_Create,
             argtypes=[ctypes.POINTER(HE_CKKS_Context),
             ctypes.POINTER(HE_CKKS_SecretKey)],
-            restype=None
+            restype=ctypes.POINTER(HE_CKKS_Decryptor)
         )
 
         #Originally argtypes were ctypes.c_int, which is incompatible with HEonGPU, hopefully this works
@@ -749,9 +789,14 @@ class HEonGPULibrary:
         self._Decrypt = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Decryptor_Decrypt,
             argtypes=[
-                ctypes.POINTER(HE_CKKS_Ciphertext)],
-            restype=ctypes.POINTER(HE_CKKS_Plaintext)
+                ctypes.POINTER(HE_CKKS_Decryptor),  # decryptor handle
+                ctypes.POINTER(HE_CKKS_Plaintext),  # pt_out_c (output plaintext handle)
+                ctypes.POINTER(HE_CKKS_Ciphertext), # ct_in_c (input ciphertext handle)
+                ctypes.POINTER(C_ExecutionOptions)   # options
+            ],
+            restype=ctypes.c_int  # Returns an integer status code
         )
+
     
     def NewEncryptor(self):
         #assume 1 global public key for public key encryption:
@@ -766,7 +811,32 @@ class HEonGPULibrary:
         return new_ciphertext_handle
 
     def Decrypt(self, ct):
-        pass
+        if not self.decryptor_handle:
+            raise RuntimeError("Decryptor has not been initialized.")
+        if not ct:
+            raise ValueError("Input ciphertext handle cannot be null.")
+        pt_out_handle = self.CreatePlaintext()
+        print("[DEBUG] Preparing to call self._Decrypt.")
+        print(f"    - Arg 'decryptor_handle': {self.decryptor_handle}")
+        print(f"    - Arg 'pt_out_handle' (output buffer): {pt_out_handle}")
+        print(f"    - Arg 'ct' (input ciphertext): {ct}")
+
+        status = self._Decrypt(
+            self.decryptor_handle,
+            pt_out_handle,
+            ct,
+            None  # Assuming default execution options
+        )
+        if status != 0:
+            raise RuntimeError(f"The C++ Decrypt operation failed with status code: {status}")
+        return pt_out_handle
+
+
+
+
+
+
+
 
     def DeleteScheme(self):
         pass
@@ -797,6 +867,15 @@ class HEonGPULibrary:
             argtypes=[ctypes.POINTER(HE_CKKS_Context),
             ctypes.POINTER(C_ExecutionOptions)],
             restype=ctypes.POINTER(HE_CKKS_Ciphertext)
+        )
+        self._ModDropCiphertext = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_ArithmeticOperator_ModDrop_Ciphertext_Inplace,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.POINTER(C_ExecutionOptions)
+            ],
+            restype=None
         )
 
         #TODO: Determine the intention of this function, and map on correct HEonGPU 
@@ -1008,13 +1087,28 @@ class HEonGPULibrary:
             restype=None  # The C++ function returns void
         )
 
+    def ModDropCiphertextInplace(self, ct):
+        if not self.arithmeticoperator_handle:
+            raise RuntimeError("ArithmeticOperator has not been initialized.")
+        if not ct:
+            raise ValueError("Input ciphertext handle cannot be null.")
 
-        
+        self._ModDropCiphertext(
+            self.arithmeticoperator_handle,
+            ct,
+            None # Assuming default execution options
+        )
+        return ct
     def ModDropPlaintext(self, ptxt):
         # This calls the in-place mod drop for plaintexts
+        print("In ModDropPlaintext")
         self._ModDropPlaintext(self.arithmeticoperator_handle, ptxt, None)
     def CreateCiphertext(self):
         return self.NewCiphertext(self.context_handle, None)
+    def CreatePlaintext(self):
+        return self.NewPlaintext(self.context_handle, None)
+    def DeletePlaintext(self, pt):
+        return self.DeletePlaintext(pt)
     def NewEvaluator(self):
         print(self.context_handle)
         print(self.encoder_handle)
@@ -1043,6 +1137,7 @@ class HEonGPULibrary:
         
         # Perform the rotation.
         self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
+        self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
         return ct
 
     def RotateNew(self, ct, slots):
@@ -1066,7 +1161,7 @@ class HEonGPULibrary:
 
         # Perform the rotation.
         newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
-
+        self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
         if not newct_result:
             raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
 
@@ -1087,8 +1182,11 @@ class HEonGPULibrary:
             raise RuntimeError(f"The C++ Rescale_Inplace operation failed.")
         return ct
     def RescaleNew(self, ct):
-        newct = self.NewCiphertext(self.context_handle, None)
-        return self._RescaleNew(self.arithmeticoperator_handle, ct, newct, None)
+        cloned_ct = self.CloneCiphertext(ct)
+        if not cloned_ct:
+            raise RuntimeError("Failed to clone ciphertext in RescaleNew.")
+        rescaled_clone = self.Rescale(cloned_ct)
+        return rescaled_clone
 
     #For scalar operations, we must first encode scalar into a plaintext
     def SubScalar(self, ct, scalar):
@@ -1104,8 +1202,8 @@ class HEonGPULibrary:
 
     def AddScalar(self, ct, scalar):
         print("[DEBUG] in AddScalar")
-        current_modulus_count = self.GetCiphertextLevel(ct)
-        ct_depth = self.q_size - current_modulus_count
+        
+        ct_depth = self.GetCiphertextDepth(ct)
         pt = self.EncodeSingle(scalar, 0)
         if ct_depth > 0:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
@@ -1154,8 +1252,7 @@ class HEonGPULibrary:
     def AddPlaintext(self, ct, pt):
         # --- Start Debug Block ---
         print("\n--- [DEBUG] Entering AddPlaintext ---")
-        current_modulus_count = self.GetCiphertextLevel(ct)
-        ct_depth = self.q_size - current_modulus_count
+        ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
         print(f"ct_depth is {ct_depth} and pt_depth is {pt_depth}")
         if ct_depth > pt_depth:
@@ -1188,12 +1285,23 @@ class HEonGPULibrary:
         newct = self.NewCiphertext(self.context_handle, None)
         return self._SubPlaintextNew(self.arithmeticoperator_handle, ct, pt, newct, None)
     def MulPlaintext(self, ct, pt):
-        return self._MultiplyPlaintext(self.arithmeticoperator_handle, ct, pt, None)
+        ct_depth = self.GetCiphertextDepth(ct)
+        pt_depth = self.GetPlaintextDepth(pt)
+        if ct_depth > pt_depth:
+            print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
+            for _ in range(ct_depth - pt_depth):
+                self.ModDropPlaintext(pt)
+        print("About to call _MultiplyPlaintext")
+        self._MultiplyPlaintext(self.arithmeticoperator_handle, ct, pt, None)
+        return ct
     def MulPlainNew(self, ct, pt):
         newct_shell = self.NewCiphertext(self.context_handle, None)
-        print(self.arithmeticoperator_handle)
-        print(ct)
-        print(pt)
+        ct_depth = self.GetCiphertextDepth(ct)
+        pt_depth = self.GetPlaintextDepth(pt)
+        if ct_depth > pt_depth:
+            print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
+            for _ in range(ct_depth - pt_depth):
+                self.ModDropPlaintext(pt)
         print(newct_shell)
         newct_result = self._MultiplyPlaintextNew(self.arithmeticoperator_handle, ct, pt, newct_shell, None)
         if not newct_result:
@@ -1206,12 +1314,45 @@ class HEonGPULibrary:
     def AddCiphertext(self, ct1, ct2):
         return self._AddCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
     def AddCiphertextNew(self, ct1, ct2):
-        newct_shell = self.NewCiphertext(self.context_handle, None)
-        newct_result = self._AddCiphertextNew(self.arithmeticoperator_handle, ct1, ct2, newct_shell, None)
-        if not newct_result:
-            raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Add failed and returned a null pointer.")
-        return newct_result
-        return self._AddCiphertextNew(self.arithmeticoperator_handle, ct1, ct2, newct, None)
+        depth1 = self.GetCiphertextDepth(ct1)
+        depth2 = self.GetCiphertextDepth(ct2)
+        ct1_to_add = ct1
+        ct2_to_add = ct2
+        temp_ct = None
+
+        try:
+            if depth1 < depth2:
+                print(f"[DEBUG] AddCiphertextNew: Mismatch. Cloning and dropping ct1 from depth {depth1} to {depth2}.")
+                temp_ct = self.CloneCiphertext(ct1)
+                ct1_to_add = temp_ct # The addition will use the clone.
+                for _ in range(depth2 - depth1):
+                    self.ModDropCiphertextInplace(ct1_to_add)
+
+            elif depth2 < depth1:
+                print(f"[DEBUG] AddCiphertextNew: Mismatch. Cloning and dropping ct2 from depth {depth2} to {depth1}.")
+                temp_ct = self.CloneCiphertext(ct2)
+                ct2_to_add = temp_ct # The addition will use the clone.
+                for _ in range(depth1 - depth2):
+                    self.ModDropCiphertextInplace(ct2_to_add)
+
+            newct_shell = self.NewCiphertext(self.context_handle, None)
+            newct_result = self._AddCiphertextNew(
+                self.arithmeticoperator_handle,
+                ct1_to_add,
+                ct2_to_add,
+                newct_shell,
+                None
+            )
+
+            if not newct_result:
+                raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Add failed and returned a null pointer.")
+
+            return newct_result
+
+        finally:
+            if temp_ct:
+                self._DeleteCiphertext(temp_ct)
+
     def SubCiphertext(self, ct1, ct2):
         return self._SubCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
     def SubCiphertextNew(self, ct1, ct2):
@@ -1336,6 +1477,8 @@ class HEonGPULibrary:
         self.linear_transforms.append(transform_plan)
         return len(self.linear_transforms) - 1
     
+
+
     def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
@@ -1514,73 +1657,76 @@ class HEonGPULibrary:
     #should generally work (might overshoot)
     BOOTSTRAP_PRESET_CONFIG = {
         # Target Depth: { 'taylor_number', 'CtoS_piece', 'StoC_piece', 'less_key_mode' }
-        1: {
-            'taylor_number': 7, 
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+        # 1: {
+        #     'taylor_number': 7, 
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        2: {    #modified
+            'taylor_number': 11,    
+            'CtoS_piece': 3,    
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
-        2: {
-            'taylor_number': 7,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        3: {
-            'taylor_number': 7,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        4: {
-            'taylor_number': 11,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        5: {
-            'taylor_number': 11,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        6: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        7: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        8: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        9: {
-            'taylor_number': 15, # WARNING: Max recommended value reached
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        },
-        10: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
-        }
+        # 3: {
+        #     'taylor_number': 7,
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        # 4: {
+        #     'taylor_number': 11,
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        # 5: {
+        #     'taylor_number': 11,
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        # 6: {
+        #     'taylor_number': 15,
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        # 7: {
+        #     'taylor_number': 15,
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        # 8: {
+        #     'taylor_number': 15,
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        # 9: {
+        #     'taylor_number': 15, # WARNING: Max recommended value reached
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # },
+        # 10: {
+        #     'taylor_number': 15,
+        #     'CtoS_piece': 5,
+        #     'StoC_piece': 5,
+        #     'less_key_mode': False
+        # }
     }
     def NewBootstrapper(self, logPs, num_slots):
         #we dont care about the exaxt logPs, or num_slots, just the length. HEonGPU will create the logPs from the parameters given:
-        
         print(logPs)
         length = len(logPs)
         config_params = self.BOOTSTRAP_PRESET_CONFIG[length]
+        print("[DEBUG] In NewBootstrapper:")
+        print(f"    - logPs length: {length}")
+        print(f"    - Selected config_params: {config_params}")
+        print(f"    - Scale being passed: {self.scale}")
 
         boot_config = C_BootstrappingConfig(
             CtoS_piece=config_params['CtoS_piece'],
@@ -1589,7 +1735,14 @@ class HEonGPULibrary:
             less_key_mode=config_params['less_key_mode']
         )
 
-
+        print("\n[DEBUG] Preparing to call _GenerateBootstrappingParams with the following arguments:")
+        print(f"    - Arg 'arithmeticoperator_handle': {self.arithmeticoperator_handle}")
+        print(f"    - Arg 'scale': {self.scale}")
+        print(f"    - Arg 'boot_config':")
+        print(f"        - CtoS_piece: {boot_config.CtoS_piece}")
+        print(f"        - StoC_piece: {boot_config.StoC_piece}")
+        print(f"        - taylor_number: {boot_config.taylor_number}")
+        print(f"        - less_key_mode: {boot_config.less_key_mode}\n")
         self.bootstrap_handle = self._GenerateBootstrappingParams(
             self.arithmeticoperator_handle,
             ctypes.c_double(self.scale),
@@ -1598,6 +1751,32 @@ class HEonGPULibrary:
 
     def Bootstrap(self, ct, num_slots):
         print("[DEBUG] Bootsrapping!")
+        print("[DEBUG] Entering Python binding for Bootstrap.")
+        
+        required_level = 1
+        total_levels = self.q_size
+
+        while True:
+            current_depth = self.GetCiphertextDepth(ct)
+            current_level = total_levels - current_depth
+
+            if current_level <= required_level:
+                print(f"[DEBUG]   - Ciphertext is at required level {current_level}. Proceeding.")
+                break
+
+            print(f"[DEBUG]   - Ciphertext level is {current_level}. Dropping to {current_level - 1} via ModDropCiphertextInplace.")
+            
+
+            self.ModDropCiphertextInplace(ct)
+
+        ct_depth = self.GetCiphertextDepth(ct)
+        ct_level = total_levels - ct_depth
+        ct_scale = self.GetCiphertextScale(ct)
+
+        print(f"[DEBUG]   - Final Input ciphertext depth from C++: {ct_depth}")
+        print(f"[DEBUG]   - Final Input ciphertext remaining levels: {ct_level}")
+        print(f"[DEBUG]   - Final Input ciphertext scale from C++: {ct_scale}")
+        
         indices_ptr = ctypes.POINTER(ctypes.c_int)()
         count = ctypes.c_size_t()
         
@@ -1606,11 +1785,32 @@ class HEonGPULibrary:
             ctypes.byref(indices_ptr),
             ctypes.byref(count)
         )
+        print("[DEBUG]   - Output of _GetBootstrappingKeyIndices:")
+        print(f"[DEBUG]     - Status: {status}")
+        print(f"[DEBUG]     - Count of indices: {count.value}")
+        if indices_ptr and count.value > 0:
+            num_indices_to_print = min(10, count.value)
+            indices_list = [indices_ptr[i] for i in range(num_indices_to_print)]
+            print(f"[DEBUG]     - First {num_indices_to_print} indices: {indices_list}")
+
         galois_key_handle = self.CreateGaloisKeyWithShifts(
             self.context_handle,
             indices_ptr,
             count
         )
+        print("[DEBUG]   - Output of CreateGaloisKeyWithShifts:")
+        print(f"[DEBUG]     - Galois Key Handle: {galois_key_handle}")
+        #Need to generate the keys here *****
+        status = self.GenerateGaloisKey(
+            self.keygenerator_handle,
+            galois_key_handle,
+            self.secretkey_handle,
+            None
+        )
+        print("[DEBUG]   - Finished generating Galois key data.")
+
+
+        print("[DEBUG] Before _RegularBootstrapping.")
         bootstrapped_ct = self._RegularBootstrapping(
             self.arithmeticoperator_handle,
             ct,
@@ -1618,7 +1818,12 @@ class HEonGPULibrary:
             self.relinkey_handle,
             None 
         )
+
+        if not bootstrapped_ct:
+            raise RuntimeError("The C++ RegularBootstrapping operation failed and returned a null pointer.")
+
         print("[DEBUG] Finished Bootstrapping!")
+        return bootstrapped_ct
 
     
     
