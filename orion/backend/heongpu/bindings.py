@@ -239,7 +239,7 @@ class HEonGPULibrary:
         self.setup_encryptor()
         self.setup_evaluator()
         self.setup_poly_evaluator()
-        #self.setup_lt_evaluator()
+        self.setup_lt_evaluator()
         self.setup_bootstrapper()
 
     #setup scheme
@@ -363,7 +363,7 @@ class HEonGPULibrary:
 
     #tensor binds
     def setup_tensor_binds(self):
-        self.DeletePlaintext = HEonGPUFunction(
+        self._DeletePlaintext = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Plaintext_Delete,
             argtypes=[ctypes.POINTER(HE_CKKS_Plaintext)],
             restype=None
@@ -472,7 +472,9 @@ class HEonGPULibrary:
         
         return ctxt_out
 
-
+    def DeleteCiphertext(self, ct):
+        # self._DeleteCiphertext(ct)
+        pass
     def GetModuliChain(self):
         required_size = self._GetModuliChain(
             self.context_handle,
@@ -627,7 +629,7 @@ class HEonGPULibrary:
             [ctypes.POINTER(HE_CKKS_GaloisKey), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)), ctypes.POINTER(ctypes.c_size_t)], 
             ctypes.c_int
         )
-        self.DeleteGaloisKey = HEonGPUFunction(
+        self._DeleteGaloisKey = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_GaloisKey_Delete, 
             [ctypes.POINTER(HE_CKKS_GaloisKey)], 
             None
@@ -663,7 +665,9 @@ class HEonGPULibrary:
         self.publickey_handle = self.CreatePublicKey(self.context_handle)
         x = self._GeneratePublicKey(self.keygenerator_handle, self.publickey_handle, self.secretkey_handle, None)
         return x
-
+    def DeleteGaloisKey(self, handle):
+        return
+        self._DeleteGaloisKey(handle)
 
     def GenerateRelinearizationKey(self):
         print("here")
@@ -711,7 +715,7 @@ class HEonGPULibrary:
     def NewEncoder(self):
         self.encoder_handle =  self._NewEncoder(self.context_handle)
     def Encode(self, to_encode, level, scale):
-        slot_count = self.poly_degree # For conjugate invariant ring type
+        slot_count = self.poly_degree // 2 
         vector_size = len(to_encode)
         print(f"--- Python Encode Debug ---")
         print(f"  Slot Count Available: {slot_count}")
@@ -727,7 +731,7 @@ class HEonGPULibrary:
         # Use the existing Encode function by wrapping the scalar in a list.
         # The standard Encode function already handles creating and returning the
         # new plaintext handle.
-        default_scale = 2**40
+        default_scale = self.scale
         return self.Encode([scalar], level, default_scale)
 
     def Decode(self, pt):
@@ -1108,7 +1112,8 @@ class HEonGPULibrary:
     def CreatePlaintext(self):
         return self.NewPlaintext(self.context_handle, None)
     def DeletePlaintext(self, pt):
-        return self.DeletePlaintext(pt)
+        pass
+        # return self.DeletePlaintext(pt)
     def NewEvaluator(self):
         print(self.context_handle)
         print(self.encoder_handle)
@@ -1119,10 +1124,7 @@ class HEonGPULibrary:
         return self._Negate(self.arithmeticoperator_handle, ct, newct, None)
     def Rotate(self, ct, slots):
         rotation_amount = slots
-        
-        # Check if the required key exists in the cache.
         if rotation_amount not in self.rotation_keys_cache:
-            # If the key is not found, generate it using our memory-safe method.
             print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
             try:
                 self.GenerateLinearTransformRotationKey(rotation_amount)
@@ -1131,21 +1133,14 @@ class HEonGPULibrary:
 
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
 
-        # --- FINAL FIX ---
-        # Ensure the key is on the device before the operation.
         self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
-        
-        # Perform the rotation.
         self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
         self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
         return ct
 
     def RotateNew(self, ct, slots):
         rotation_amount = slots
-
-        # Check if the required key exists in the cache.
         if rotation_amount not in self.rotation_keys_cache:
-            # If the key is not found, generate it on the fly.
             print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
             try:
                 self.GenerateLinearTransformRotationKey(rotation_amount)
@@ -1153,13 +1148,9 @@ class HEonGPULibrary:
                 raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
 
         specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
-
-        # **Move the specific key to the device right before use.**
         self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
 
         newct_shell = self.NewCiphertext(self.context_handle, None)
-
-        # Perform the rotation.
         newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
         self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
         if not newct_result:
@@ -1190,21 +1181,24 @@ class HEonGPULibrary:
 
     #For scalar operations, we must first encode scalar into a plaintext
     def SubScalar(self, ct, scalar):
-        pt = self.EncodeSingle(scalar, 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        pt = self.Encode(values, 0, self.scale)
         self.SubPlaintext(ct, pt)
         self.DeletePlaintext(pt)
 
     def SubScalarNew(self, ct, scalar):
-        pt = self.EncodeSingle(scalar, 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        pt = self.Encode(values, 0, self.scale)
         new_ct = self.SubPlaintextNew(ct, pt)
         self.DeletePlaintext(pt)
         return new_ct
 
     def AddScalar(self, ct, scalar):
-        print("[DEBUG] in AddScalar")
-        
-        ct_depth = self.GetCiphertextDepth(ct)
-        pt = self.EncodeSingle(scalar, 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        pt = self.Encode(values, 0, self.scale)
         if ct_depth > 0:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth):
@@ -1215,29 +1209,47 @@ class HEonGPULibrary:
 
 
     def AddScalarNew(self, ct, scalar):
-        pt = self.EncodeSingle(scalar, 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        pt = self.Encode(values, 0, self.scale)
         new_ct = self.AddPlaintextNew(ct, pt)
         self.DeletePlaintext(pt)
         return new_ct
 
     def MulScalarInt(self, ctxt, scalar):
-        pt = self.EncodeSingle(float(scalar), 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        print("[VALUES4]: ")
+        print(values)
+        pt = self.Encode(values, 0, self.scale)
         self.MulPlaintext(ctxt, pt)
         self.DeletePlaintext(pt)
 
     def MulScalarIntNew(self, ctxt, scalar):
-        pt = self.EncodeSingle(float(scalar), 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        print("[VALUES3]: ")
+        print(values)
+        pt = self.Encode(values, 0, self.scale)
         new_ct = self.MulPlaintextNew(ctxt, pt)
         self.DeletePlaintext(pt)
         return new_ct
 
     def MulScalarFloat(self, ct, scalar):
-        pt = self.EncodeSingle(scalar, 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        print("[VALUES]: ")
+        print(values)
+        pt = self.Encode(values, 0, self.scale)
         self.MulPlaintext(ct, pt)
         self.DeletePlaintext(pt)
 
     def MulScalarFloatNew(self, ct, scalar):
-        pt = self.EncodeSingle(scalar, 0)
+        num_slots = self.poly_degree // 2
+        values = [scalar] * num_slots
+        print("[VALUES2]: ")
+        print(values)
+        pt = self.Encode(values, 0, self.scale)
         new_ct = self.MulPlaintextNew(ct, pt)
         self.DeletePlaintext(pt)
         return new_ct
@@ -1250,7 +1262,6 @@ class HEonGPULibrary:
 
     #these functions should be simple wrappers
     def AddPlaintext(self, ct, pt):
-        # --- Start Debug Block ---
         print("\n--- [DEBUG] Entering AddPlaintext ---")
         ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
@@ -1259,20 +1270,14 @@ class HEonGPULibrary:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth - pt_depth):
                 self.ModDropPlaintext(pt)
-        # Use the getter functions to get the level/depth of each object
         ct_level = self.GetCiphertextLevel(ct)
         pt_depth = self.GetPlaintextDepth(pt)
-        
-        # Print the levels for comparison
         print(f"    Ciphertext Level (remaining moduli): {ct_level}")
         print(f"    Plaintext Depth (consumed moduli): {pt_depth}")
         
         
 
         print("--- [DEBUG] Calling backend _AddPlaintext ---")
-        # --- End Debug Block ---
-
-        # Call the original function
         return self._AddPlaintext(self.arithmeticoperator_handle, ct, pt, None)
 
 
@@ -1287,6 +1292,8 @@ class HEonGPULibrary:
     def MulPlaintext(self, ct, pt):
         ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
+        print("Decoding in Multi")
+        print(self.Decode(pt)[:10])
         if ct_depth > pt_depth:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth - pt_depth):
@@ -1298,6 +1305,8 @@ class HEonGPULibrary:
         newct_shell = self.NewCiphertext(self.context_handle, None)
         ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
+        print("Decoding in MultiNew")
+        print(self.Decode(pt)[:10])
         if ct_depth > pt_depth:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth - pt_depth):
@@ -1309,6 +1318,7 @@ class HEonGPULibrary:
         return newct_result
     
     def MulPlaintextNew(self, ct, pt):
+        print("[DEBUG], in MulPlaintextNew")
         return self.MulPlainNew(ct, pt)
     
     def AddCiphertext(self, ct1, ct2):
@@ -1351,7 +1361,7 @@ class HEonGPULibrary:
 
         finally:
             if temp_ct:
-                self._DeleteCiphertext(temp_ct)
+                self.DeleteCiphertext(temp_ct)
 
     def SubCiphertext(self, ct1, ct2):
         return self._SubCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
@@ -1454,7 +1464,7 @@ class HEonGPULibrary:
 
 
     #setup_lt_evaluator
-    def setup_lt_evaluator():
+    def setup_lt_evaluator(self):
         #currently set up at python level, so no backend binding necassary
         pass
 
@@ -1513,11 +1523,11 @@ class HEonGPULibrary:
 
             # --- Definitive Memory Management ---
             # Safely delete the previous accumulator and all temporary objects from this loop.
-            self._DeleteCiphertext(accumulator_ctxt)
+            self.DeleteCiphertext(accumulator_ctxt)
             self.DeletePlaintext(diag_ptxt)
-            self._DeleteCiphertext(term_ctxt)
+            self.DeleteCiphertext(term_ctxt)
             if diag_idx != 0:
-                self._DeleteCiphertext(rotated_ctxt)
+                self.DeleteCiphertext(rotated_ctxt)
 
             # Update the accumulator to point to the new sum.
             accumulator_ctxt = new_accumulator_ctxt
@@ -1535,6 +1545,7 @@ class HEonGPULibrary:
 
 
     def DeleteLinearTransform(self, transform_id):
+        return
         if 0 <= transform_id < len(self.linear_transforms):
             self.linear_transforms[transform_id] = None
     
