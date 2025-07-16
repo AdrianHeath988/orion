@@ -1,6 +1,7 @@
 import os 
 import ctypes
 import platform
+import math
 
 import torch
 import numpy as np
@@ -67,7 +68,13 @@ class ArrayResultByte(ctypes.Structure):
 class HE_CKKS_Plaintext(ctypes.Structure):
     _fields_ = [("cpp_plaintext", ctypes.c_void_p)]
 
+_heongpu_instance = None
 
+def get_heongpu_library():
+    global _heongpu_instance
+    if _heongpu_instance is None:
+        _heongpu_instance = HEonGPULibrary()
+    return _heongpu_instance
 
 
 class HEonGPUFunction:
@@ -242,6 +249,18 @@ class HEonGPULibrary:
         self.setup_lt_evaluator()
         self.setup_bootstrapper()
 
+    def shutdown(self):
+        print("Requesting manual HEonGPU resource cleanup...")
+        self.Shutdown = HEonGPUFunction(
+            self.lib.heongpu_shutdown,
+            argtypes=[
+            ],
+            restype=None
+        )
+        #Now, call it
+        self.Shutdown()
+        
+
     #setup scheme
     def setup_scheme(self, orion_params):
         """
@@ -334,7 +353,8 @@ class HEonGPULibrary:
         self.poly_degree = poly_degree 
         logq = orion_params.get_logq()
         logp = orion_params.get_logp()
-        self.scale = 1 << orion_params.get_logscale()
+        print(orion_params.get_logscale())
+        self.scale = 2.0 ** orion_params.get_logscale()
         self.q_size = len(logq)
         print(f"INFO: Setting PolyModulusDegree to {poly_degree}")
         self.HEonGPU_CKKS_Context_SetPolyModulusDegree(context_handle, poly_degree)
@@ -642,7 +662,7 @@ class HEonGPULibrary:
             ],
             restype=None
         )
-
+        #change to be explicitly set in pinned memory
         self.StoreGaloisKeyInHost = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_GaloisKey_StoreInHost,
             argtypes=[
@@ -715,16 +735,17 @@ class HEonGPULibrary:
     def NewEncoder(self):
         self.encoder_handle =  self._NewEncoder(self.context_handle)
     def Encode(self, to_encode, level, scale):
+        scale = self.scale
         slot_count = self.poly_degree // 2 
         vector_size = len(to_encode)
         print(f"--- Python Encode Debug ---")
         print(f"  Slot Count Available: {slot_count}")
         print(f"  Requested Vector Size: {vector_size}")
-        pt = self.NewPlaintext(self.context_handle, None)
+        print(f"  Requested Scale: {scale}")
+        pt = self.CreatePlaintext()
         status = self._Encode(self.encoder_handle, pt, to_encode, scale, None)
         if status != 0:
             raise RuntimeError(f"HEonGPU_CKKS_Encoder_Encode_Double failed with status {status}")
-
         return pt
   
     def EncodeSingle(self, scalar, level):
@@ -742,6 +763,7 @@ class HEonGPULibrary:
             raise ValueError("Input plaintext handle cannot be null.")
         buffer_len = num_slots
         message_buffer = (ctypes.c_double * buffer_len)()
+        print(message_buffer)
         elements_copied = self._Decode(
             self.encoder_handle,
             pt,
@@ -1293,7 +1315,9 @@ class HEonGPULibrary:
         ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
         print("Decoding in Multi")
-        print(self.Decode(pt)[:10])
+        x = self.Decode(pt)
+        print("Are all values the same?")
+        print((len(set(x)) <= 1) and x[0] == 0)
         if ct_depth > pt_depth:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth - pt_depth):
@@ -1306,7 +1330,20 @@ class HEonGPULibrary:
         ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
         print("Decoding in MultiNew")
-        print(self.Decode(pt)[:10])
+        x = self.Decode(pt)
+        print("Are all values of pt the same?")
+        print((len(set(x)) <= 1) and x[0] == 0)
+        if(not((len(set(x)) <= 1) and x[0] == 0)):
+            print(x[:10])
+
+
+        print("Decrypting In MultiNew")
+        pt_out_handle = self.Decrypt(ct)
+        x = self.Decode(pt_out_handle)
+        print("Are all values of ct the same?")
+        print((len(set(x)) <= 1) and x[0] == 0)
+        if(not((len(set(x)) <= 1) and x[0] == 0)):
+            print(x[:10])
         if ct_depth > pt_depth:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth - pt_depth):
@@ -1836,7 +1873,6 @@ class HEonGPULibrary:
         print("[DEBUG] Finished Bootstrapping!")
         return bootstrapped_ct
 
-    
     
 
 

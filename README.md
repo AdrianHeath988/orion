@@ -26,5 +26,5 @@ source /home/adrian/.cache/pypoetry/virtualenvs/orion-fhe-NaQa48nB-py3.10/bin/ac
 python3 run_lola.py
 or
 python3 run_mlp.py # (smaller model)
-
+~/local/bin/gdb --args python3 -m run_lola
 
