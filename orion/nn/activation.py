@@ -48,11 +48,18 @@ class Quad(Module):
         self.set_depth(1)
 
     def forward(self, x):
-        print("IN QUAD.FORWARD")
+        if(self.he_mode):
+            pt = x.decrypt()
+            val = pt.decode()
+            print(f"[QUAD FHE BEFORE] - {val[:10]}")
         out = x * x 
-        print("IN QUAD.FORWARD AFTER MULT")
         if self.he_mode:
             out.set_scale(x.scale()) 
+
+        if(self.he_mode):
+            pt = out.decrypt()
+            val = pt.decode()
+            print(f"[QUAD FHE] - {val[:10]}")
         return out
 
 

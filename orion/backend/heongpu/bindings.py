@@ -542,6 +542,7 @@ class HEonGPULibrary:
                 return ct
             else:
                 #All else fails: set scale manually
+                return ct
                 ct = self._SetCiphertextScale(ct, scale)
                 current_scale = self.GetCiphertextScale(ct)
                 if(math.isclose(current_scale, scale)):
@@ -865,10 +866,10 @@ class HEonGPULibrary:
         if not ct:
             raise ValueError("Input ciphertext handle cannot be null.")
         pt_out_handle = self.CreatePlaintext()
-        print("[DEBUG] Preparing to call self._Decrypt.")
-        print(f"    - Arg 'decryptor_handle': {self.decryptor_handle}")
-        print(f"    - Arg 'pt_out_handle' (output buffer): {pt_out_handle}")
-        print(f"    - Arg 'ct' (input ciphertext): {ct}")
+        # print("[DEBUG] Preparing to call self._Decrypt.")
+        # print(f"    - Arg 'decryptor_handle': {self.decryptor_handle}")
+        # print(f"    - Arg 'pt_out_handle' (output buffer): {pt_out_handle}")
+        # print(f"    - Arg 'ct' (input ciphertext): {ct}")
 
         status = self._Decrypt(
             self.decryptor_handle,
@@ -1168,6 +1169,9 @@ class HEonGPULibrary:
         newct = self.NewCiphertext(self.context_handle, None)
         return self._Negate(self.arithmeticoperator_handle, ct, newct, None)
     def Rotate(self, ct, slots):
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        print(f"[DEBUG] In Rotate, old value is: {newval[:10]}")
         rotation_amount = slots
         if rotation_amount not in self.rotation_keys_cache:
             print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
@@ -1184,6 +1188,9 @@ class HEonGPULibrary:
         return ct
 
     def RotateNew(self, ct, slots):
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
         rotation_amount = slots
         if rotation_amount not in self.rotation_keys_cache:
             print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
@@ -1196,8 +1203,12 @@ class HEonGPULibrary:
         self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
 
         newct_shell = self.NewCiphertext(self.context_handle, None)
+        print("[DEBUG] In bindings.py RotateNew, calling _RotateNew")
         newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
         self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
+        newpt = self.Decrypt(newct_result)
+        newval =  self.Decode(newpt)
+        print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
         if not newct_result:
             raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
 
@@ -1311,11 +1322,18 @@ class HEonGPULibrary:
         pt_depth = self.GetPlaintextDepth(pt)
         print(f"    Ciphertext Level (remaining moduli): {ct_level}")
         print(f"    Plaintext Depth (consumed moduli): {pt_depth}")
-        
+        oldpt = self.Decrypt(ct)
+        oldval =  self.Decode(oldpt)
+        print(f"[DEBUG] In AddPlaintext, old value is: {oldval[:10]}")
         
 
         print("--- [DEBUG] Calling backend _AddPlaintext ---")
-        return self._AddPlaintext(self.arithmeticoperator_handle, ct, pt, None)
+        ret = self._AddPlaintext(self.arithmeticoperator_handle, ct, pt, None)
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        print(f"[DEBUG] In AddPlaintext, new value is: {newval[:10]}")
+
+        return ret
 
 
     def AddPlaintextNew(self, ct, pt):
@@ -1370,7 +1388,10 @@ class HEonGPULibrary:
         return newct_result
     
     def MulPlaintextNew(self, ct, pt):
-        print("[DEBUG], in MulPlaintextNew")
+        
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        print(f"[DEBUG], in MulPlaintextNew - {newval[:10]}")
         return self.MulPlainNew(ct, pt)
     
     def AddCiphertext(self, ct1, ct2):
@@ -1398,6 +1419,14 @@ class HEonGPULibrary:
                     self.ModDropCiphertextInplace(ct2_to_add)
 
             newct_shell = self.NewCiphertext(self.context_handle, None)
+
+
+            midpt = self.Decrypt(ct1_to_add)
+            midval =  self.Decode(midpt)
+            midpt2 = self.Decrypt(ct2_to_add)
+            midval2 =  self.Decode(midpt2)
+            print(f"[DEBUG] In AddCiphertextNew, adding {midval[:10]} with {midval2[:10]}")
+            print(f"[DEBUG] In AddCiphertextNew, ct1 has scale {self.GetCiphertextScale(ct1)}, ct2 has scale {self.GetCiphertextScale(ct2)}")
             newct_result = self._AddCiphertextNew(
                 self.arithmeticoperator_handle,
                 ct1_to_add,
@@ -1405,7 +1434,9 @@ class HEonGPULibrary:
                 newct_shell,
                 None
             )
-
+            endpt = self.Decrypt(newct_result)
+            endval =  self.Decode(endpt)
+            print(f"[DEBUG] In AddCiphertextNew, end is {endval[:10]}")
             if not newct_result:
                 raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Add failed and returned a null pointer.")
 
@@ -1542,39 +1573,47 @@ class HEonGPULibrary:
 
 
     def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
+        newpt = self.Decrypt(ctxt_in_handle)
+        newval =  self.Decode(newpt)
+        print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
         
         initial_scale = self.scale
         initial_level = self.GetCiphertextLevel(ctxt_in_handle)
         num_slots = self.GetCiphertextSlots(ctxt_in_handle)
-
-        # 1. Create the initial accumulator ciphertext.
         zero_ptxt = self.Encode([0.0] * num_slots, level=initial_level, scale=initial_scale)
         accumulator_ctxt = self.Encrypt(zero_ptxt)
         self.DeletePlaintext(zero_ptxt) # This plaintext is no longer needed.
-
-        # 2. Perform the main computation loop.
         for diag_idx, diag_coeffs in diagonals.items():
-            # Create temporary objects for this iteration.
             rotated_ctxt = self.RotateNew(ctxt_in_handle, diag_idx)
             diag_ptxt = self.Encode(diag_coeffs, level=self.GetCiphertextLevel(rotated_ctxt), scale=initial_scale)
             
-            # Check for failures from the previous step.
             if not rotated_ctxt or not diag_ptxt:
                 raise RuntimeError("Failed to create rotated ciphertext or diagonal plaintext.")
-                
+            
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE rotated_ctxt scale - {self.GetCiphertextScale(rotated_ctxt)} diag_ptxt scale - {self.GetPlaintextScale(diag_ptxt)}")
             term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
+            self.Rescale(term_ctxt)
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt scale - {self.GetCiphertextScale(term_ctxt)}")
+            # term_ctxt = self.SetCiphertextScale(term_ctxt, self.GetCiphertextScale(accumulator_ctxt))
             if not term_ctxt:
                 raise RuntimeError("Failed to multiply rotated ciphertext and diagonal plaintext.")
 
-            # Create a new ciphertext for the sum.
+            midpt2 = self.Decrypt(accumulator_ctxt)
+            midval2 =  self.Decode(midpt2)
+            midpt3 = self.Decrypt(term_ctxt)
+            midval3 =  self.Decode(midpt3)
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
             new_accumulator_ctxt = self.AddCiphertextNew(accumulator_ctxt, term_ctxt)
+            midpt = self.Decrypt(new_accumulator_ctxt)
+            midval =  self.Decode(midpt)
+            
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE new_accumulator_ctxt - {midval[:10]}")
             if not new_accumulator_ctxt:
                 raise RuntimeError("Failed to add term to accumulator.")
 
-            # --- Definitive Memory Management ---
-            # Safely delete the previous accumulator and all temporary objects from this loop.
             self.DeleteCiphertext(accumulator_ctxt)
             self.DeletePlaintext(diag_ptxt)
             self.DeleteCiphertext(term_ctxt)
@@ -1584,7 +1623,9 @@ class HEonGPULibrary:
             # Update the accumulator to point to the new sum.
             accumulator_ctxt = new_accumulator_ctxt
 
-        # 3. Return the final, valid accumulator. The calling function will handle its deletion.
+        newpt = self.Decrypt(accumulator_ctxt)
+        newval =  self.Decode(newpt)
+        print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
         return accumulator_ctxt
         
 
@@ -1611,6 +1652,14 @@ class HEonGPULibrary:
         #Lattigo convention represent this with the Galois element for N+1
         #but we use a simple mapping: rotation_step=0 -> galois_elt=0 (placeholder)
         required_rotations = list(plan['diagonals'].keys())
+        #also generate all powers of 2
+        i = 2
+        while i <= self.poly_degree // 2:
+            if i not in required_rotations:
+                required_rotations.append(i)
+            i *= 2
+        
+        print(f"[DEBUG] Required Rotations: {required_rotations}")
         if 0 in required_rotations:
             #for conjugation
             pass

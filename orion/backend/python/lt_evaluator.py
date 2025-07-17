@@ -64,23 +64,25 @@ class NewEvaluator:
         keys_to_gen = set(curr_keys).difference(self.saved_rotation_keys)
         self.saved_rotation_keys.update(keys_to_gen)
 
-        if self.io_mode == "none":
-            for key in keys_to_gen:
-                self.backend.GenerateLinearTransformRotationKey(key)
 
-        elif self.io_mode == "save":
-            with h5py.File(self.keys_path, "a") as f:
-                for key in keys_to_gen:
-                    key_str = str(key)
-                    if key_str in f: # don't regenerate the key
-                        continue
+        #Keep all keys in ram for now
+        # if self.io_mode == "none":
+        for key in keys_to_gen:
+            self.backend.GenerateLinearTransformRotationKey(key)
+
+        # elif self.io_mode == "save":
+        #     with h5py.File(self.keys_path, "a") as f:
+        #         for key in keys_to_gen:
+        #             key_str = str(key)
+        #             if key_str in f: # don't regenerate the key
+        #                 continue
                     
-                    # We'll generate, serialize, and then save the key
-                    serial_key, ptr = self.backend.GenerateAndSerializeRotationKey(key)
-                    try:
-                        f.create_dataset(key_str, data=serial_key)
-                    finally:
-                        self.backend.FreeCArray(ptr)
+        #             # We'll generate, serialize, and then save the key
+        #             serial_key, ptr = self.backend.GenerateAndSerializeRotationKey(key)
+        #             try:
+        #                 f.create_dataset(key_str, data=serial_key)
+        #             finally:
+        #                 self.backend.FreeCArray(ptr)
 
     def save_transforms(self, linear_layer):
         layer_name = linear_layer.name
@@ -145,6 +147,9 @@ class NewEvaluator:
         return all_diagonals, on_bias, output_rotations
 
     def evaluate_transforms(self, linear_layer, in_ctensor):
+        pt = in_ctensor.decrypt()
+        val = pt.decode()
+        print(f"[EVALUATE TRANSFORMS BEFORE] - {val[:10]}")
         layer_name = linear_layer.name
         out_shape = linear_layer.output_shape
         fhe_out_shape = linear_layer.fhe_output_shape 
@@ -180,7 +185,9 @@ class NewEvaluator:
             # We know the output of this accumulation will just be one ciphertext
             ct_out_rescaled = self.evaluator.rescale(ct_out.ids[0], in_place=False)
             cts_out.append(ct_out_rescaled)
-
+        pt = in_ctensor.decrypt()
+        val = pt.decode()
+        print(f"[EVALUATE TRANSFORMS AFTER] - {val[:10]}")
         return CipherTensor(self.scheme, cts_out, out_shape, fhe_out_shape)
             
     def delete_transforms(self, transform_ids: dict):

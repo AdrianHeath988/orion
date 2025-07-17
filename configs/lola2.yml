@@ -4,7 +4,7 @@ ckks_params:
   LogN: 16  #originally 16
   LogQ: [60, 30, 30, 30, 30, 30, 30]
   LogP: [60, 60]
-  LogScale: 40
+  LogScale: 30
   H: 8192
   RingType: Standard
 
