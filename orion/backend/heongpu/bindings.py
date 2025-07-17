@@ -416,15 +416,14 @@ class HEonGPULibrary:
         #     restype=None
         # )
 
-        #Not A thing
-        # self.SetCiphertextScale = HEonGPUFunction(
-        #     self.lib.HEonGPU_CKKS_Ciphertext_SetScale,
-        #     argtypes=[
-        #         ctypes.POINTER(HE_CKKS_Ciphertext),
-        #         ctypes.c_double,
-        #     ],
-        #     restype=ctypes.c_double
-        # )
+        self._SetCiphertextScale = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_Ciphertext_Set_Scale,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Ciphertext),
+                ctypes.c_double,
+            ],
+            restype=ctypes.POINTER(HE_CKKS_Ciphertext)
+        )
 
         # "Level" corresponds to the number of remaining prime moduli in the chain.
         # However, plaintext in HEonGPU stores depth (number of prime moduli consumed).
@@ -527,6 +526,30 @@ class HEonGPULibrary:
         if hasattr(self, 'poly_degree'):
             return self.poly_degree // 2
         raise ValueError("poly_degree not available.")
+
+
+    #This function asserts that the current scale is equivilent to the scale it is being 'set' to
+    #If not, then an error will eb thrown
+    def SetCiphertextScale(self, ct, scale):
+        current_scale = self.GetCiphertextScale(ct)
+        if(math.isclose(current_scale, scale)):
+            return ct
+        else:
+            #try to rescale:
+            ct = self.Rescale(ct)
+            current_scale = self.GetCiphertextScale(ct)
+            if(math.isclose(current_scale, scale)):
+                return ct
+            else:
+                #All else fails: set scale manually
+                ct = self._SetCiphertextScale(ct, scale)
+                current_scale = self.GetCiphertextScale(ct)
+                if(math.isclose(current_scale, scale)):
+                    return ct
+                else:
+                    #Should never reach this point
+                    print(f"\n[DEBUG] Current Scale is {current_scale}, requested scale is {scale}.\n")
+                    raise ValueError("scales not equal.")
 
     
 
@@ -1241,8 +1264,6 @@ class HEonGPULibrary:
     def MulScalarInt(self, ctxt, scalar):
         num_slots = self.poly_degree // 2
         values = [scalar] * num_slots
-        print("[VALUES4]: ")
-        print(values)
         pt = self.Encode(values, 0, self.scale)
         self.MulPlaintext(ctxt, pt)
         self.DeletePlaintext(pt)
@@ -1250,8 +1271,6 @@ class HEonGPULibrary:
     def MulScalarIntNew(self, ctxt, scalar):
         num_slots = self.poly_degree // 2
         values = [scalar] * num_slots
-        print("[VALUES3]: ")
-        print(values)
         pt = self.Encode(values, 0, self.scale)
         new_ct = self.MulPlaintextNew(ctxt, pt)
         self.DeletePlaintext(pt)
@@ -1260,8 +1279,6 @@ class HEonGPULibrary:
     def MulScalarFloat(self, ct, scalar):
         num_slots = self.poly_degree // 2
         values = [scalar] * num_slots
-        print("[VALUES]: ")
-        print(values)
         pt = self.Encode(values, 0, self.scale)
         self.MulPlaintext(ct, pt)
         self.DeletePlaintext(pt)
@@ -1269,8 +1286,6 @@ class HEonGPULibrary:
     def MulScalarFloatNew(self, ct, scalar):
         num_slots = self.poly_degree // 2
         values = [scalar] * num_slots
-        print("[VALUES2]: ")
-        print(values)
         pt = self.Encode(values, 0, self.scale)
         new_ct = self.MulPlaintextNew(ct, pt)
         self.DeletePlaintext(pt)

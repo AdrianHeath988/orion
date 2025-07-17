@@ -48,30 +48,11 @@ class Quad(Module):
         self.set_depth(1)
 
     def forward(self, x):
-        
-        # print("\n--- [DEBUG] Entering Quad.forward ---")
-        # print(f"    Type of input x: {type(x)}")
-        # if hasattr(x, 'shape'):
-        #     print(f"    Shape of input x: {x.shape}")
-        # if hasattr(x, 'scale') and callable(x.scale):
-        #     print(f"    Scale of input x: {x.scale()}")
-
-
-        out = x * x
-        
+        print("IN QUAD.FORWARD")
+        out = x * x 
+        print("IN QUAD.FORWARD AFTER MULT")
         if self.he_mode:
-            pass
-            # print("\n--- [DEBUG] After multiplication in Quad.forward ---")
-            # print(f"    Type of output 'out': {type(out)}")
-            # if hasattr(out, 'shape'):
-            #     print(f"    Shape of output 'out': {out.shape}")
-            # if hasattr(out, 'scale') and callable(out.scale):
-            #     print(f"    Scale of output 'out': {out.scale()}")
-
-
-            # This is the corrected rescale logic
-            # x.evaluator.rescale(out.values, in_place=True)
-        # print(f"\n--- [DEBUG] Returning From Quad.forward --")
+            out.set_scale(x.scale()) 
         return out
 
 

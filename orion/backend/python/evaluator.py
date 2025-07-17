@@ -70,8 +70,12 @@ class NewEvaluator:
             ct_out = self.backend.MulPlaintext(ctxt, ptxt)
         else:
             ct_out = self.backend.MulPlaintextNew(ctxt, ptxt) 
-        print(f"[DEBUG] In evaluator.py mul_plaintext, address of ct: {id(ct_out)}")
-        return self.backend.Rescale(ct_out)
+        newct =  self.backend.Rescale(ct_out)
+        check_pt = newct.decrypt()
+        check = check_pt.decode()
+        print("In mul_plaintext")
+        print(check)
+        return newct
 
     def add_ciphertext(self, ctxt0, ctxt1, in_place):
         if in_place:
@@ -89,7 +93,8 @@ class NewEvaluator:
         else:
             ct_out = self.backend.MulRelinCiphertextNew(ctxt0, ctxt1)
         
-        return self.backend.Rescale(ct_out)
+        newct =  self.backend.Rescale(ct_out)
+        return newct
     
     def rescale(self, ctxt, in_place):
         ctxt = ctxt[0] if isinstance(ctxt, list) else ctxt
