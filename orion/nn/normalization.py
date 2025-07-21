@@ -64,11 +64,9 @@ class BatchNormNd(Module):
 
     @timer
     def forward(self, x):
-        print("[BATCHNORM DEBUG]")
         if not self.he_mode:
             self._check_input_dim(x)
         
-        print("[BATCHNORM DEBUG] - 2")
         if self.training:
             exponential_average_factor = 0.0
             if self.momentum is not None:
@@ -80,8 +78,7 @@ class BatchNormNd(Module):
         else:
             exponential_average_factor = 0.0
 
-        if not self.he_mode:     
-            print(f"[BATCH NONFHE]")       
+        if not self.he_mode:        
             return torch.nn.functional.batch_norm(
                 x,
                 self.running_mean,
@@ -94,9 +91,9 @@ class BatchNormNd(Module):
             )
 
         # In HE evaluation mode.
-        pt = x.decrypt()
-        val = pt.decode()
-        print(f"[BATCH FHE] - {val[:10]}")
+        # pt = x.decrypt()
+        # val = pt.decode()
+        # print(f"[BATCH FHE] - {val[:10]}")
         if not self.fused:
             x -= self.on_running_mean_ptxt 
             x *= self.on_inv_running_std_ptxt

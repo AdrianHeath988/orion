@@ -2,7 +2,7 @@ import os
 import ctypes
 import platform
 import math
-
+from pathlib import Path
 import torch
 import numpy as np
 import hashlib
@@ -55,8 +55,7 @@ class ArrayResultFloat(ctypes.Structure):
                 ("Length", ctypes.c_size_t)]
 
 class ArrayResultDouble(ctypes.Structure):
-    _fields_ = [("Data", ctypes.POINTER(ctypes.c_double)), 
-                ("Length", ctypes.c_size_t)]
+    _fields_ = [("Data", ctypes.POINTER(ctypes.c_double)), ("Length", ctypes.c_ulong)]
 
 class ArrayResultUInt64(ctypes.Structure):
     _fields_ = [("Data", ctypes.POINTER(ctypes.c_uint64)), # c_uint64 is an alias for c_ulonglong
@@ -104,7 +103,11 @@ class HEonGPUFunction:
                 c_args.append(c_arg)
                 
         # Call the C function with the fully processed list of arguments.
-        return self.func(*c_args)
+        c_result = self.func(*c_args)
+
+        py_result = self.convert_from_ctypes(c_result, type(c_result))
+        print(f"[DEBUG] finished converting from ctypes, result is {py_result}")
+        return py_result
 
 
 
@@ -156,23 +159,29 @@ class HEonGPUFunction:
             return arg 
             
     def convert_from_ctypes(self, res, restype):
-        if (hasattr(restype, '_type_') and 
-        isinstance(restype._type_, type) and 
-        issubclass(restype._type_, ctypes.Structure)):
+        print(f"[DEBUG] in convert_from_ctypes, res is {res}, type is {restype}")
+        if (hasattr(restype, '_type_') and isinstance(restype._type_, type) and issubclass(restype._type_, ctypes.Structure)):
             if not res:
                 return None
-            if issubclass(restype, ArrayResultFloat):
-                return [float(res.contents.Data[i]) for i in range(res.contents.Length)]
-            elif issubclass(restype, (ArrayResultInt, ArrayResultUInt64)):
-                return [int(res.contents.Data[i]) for i in range(res.contents.Length)]
-            elif issubclass(restype, ArrayResultDouble):
-                return [float(res.contents.Data[i]) for i in range(res.contents.Length)]
-            elif issubclass(restype, ArrayResultByte):
-                buffer = ctypes.cast(res.contents.Data, ctypes.POINTER(ctypes.c_ubyte * res.contents.Length)).contents
+            struct = res.contents
+            struct_type = type(struct)
+            if struct_type == ArrayResultFloat:
+                return [float(struct.Data[i]) for i in range(struct.Length)]
+            elif struct_type in (ArrayResultInt, ArrayResultUInt64):
+                return [int(struct.Data[i]) for i in range(struct.Length)]
+            elif struct_type == ArrayResultDouble:
+                print(f"[DEBUG] Handling pointer to ArrayResultDouble, struct is {struct}, struct.Data is {struct.Data}, struct.Length is {struct.Length}")
+                if not struct.Data:
+                    print("[ERROR] The structure's internal Data pointer is NULL.")
+                    return []
+                return [float(struct.Data[i]) for i in range(struct.Length)]
+            elif struct_type == ArrayResultByte:
+                buffer = ctypes.cast(struct.Data, ctypes.POINTER(ctypes.c_ubyte * struct.Length)).contents
                 array = np.frombuffer(buffer, dtype=np.uint8)
-                return array, res.contents.Data 
+                return array, struct.Data 
             else:
                 return res
+
         elif restype in (ctypes.c_int, ctypes.c_long, ctypes.c_longlong, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulonglong, ctypes.c_size_t):
             return int(res)
         elif restype in (ctypes.c_float, ctypes.c_double):
@@ -1504,46 +1513,31 @@ class HEonGPULibrary:
             self.DeletePlaintext(coeff_ptxt)
         return result_ctxt_handle
 
-    def GenerateMinimaxSignCoeffs(self, degrees, prec=64, logalpha=12, logerr=12, debug=False):
-        #Create a cache if it doesn't exist
-        if not hasattr(self, 'minimax_sign_coeffs_cache'):
-            self.minimax_sign_coeffs_cache = {}
-
-        key_params = (tuple(degrees), prec, logalpha, logerr)
-        param_hash = hashlib.sha256(str(key_params).encode()).hexdigest()
-
-        if param_hash in self.minimax_sign_coeffs_cache:
-            #If coefficients have been generated before, retrieve and return them
-            cached_coeffs_list = self.minimax_sign_coeffs_cache[param_hash]
-            flat_coeffs = [coeff for poly in cached_coeffs_list for coeff in poly]
-            return flat_coeffs
-
-        interval_start = -1.0
-        interval_end = 1.0
-        num_points = 1 << (prec.bit_length() + 1)
-        x_coords = np.linspace(interval_start, interval_end, num_points)
-        y_coords = np.sign(x_coords)
-
-        #The Lattigo function generates a composite polynomial
-        #x is passed through a series of polynomials
+    def GenerateMinimaxSignCoeffs(self, degrees, prec=64, logalpha=12, logerr=12, debug=1):
+        #Use Lattigo's backend for this:
+        from orion.backend.lattigo.bindings import LattigoFunction
+        base_path = Path(__file__).parent.parent # Goes up from heongpu/bindings.py to orion/backend/
+        lattigo_so_path = base_path / "lattigo" / "lattigo-linux.so"
+        if not lattigo_so_path.exists():
+            raise FileNotFoundError(f"Lattigo library not found at: {lattigo_so_path}")
         
-        generated_coeffs_list = []
-        max_degree = max(degrees)
-        weights = np.ones_like(x_coords)
-        weights[np.abs(x_coords) < 0.05] = 100 #Heavily weigh points near zero
-        
-        cheb_coeffs = np.polynomial.chebyshev.chebfit(x_coords, y_coords, max_degree, w=weights)
-        final_poly_coeffs = np.polynomial.chebyshev.cheb2poly(cheb_coeffs) # Convert to standard basis
+        lattigo_lib = ctypes.CDLL(str(lattigo_so_path))
 
-        all_polys = [final_poly_coeffs.tolist()]
-        for i in range(len(all_polys[-1])):
-            all_polys[-1][i] /= 2.0
-        all_polys[-1][0] += 0.5
 
-        self.minimax_sign_coeffs_cache[param_hash] = all_polys
-        flat_coeffs = [coeff for poly in all_polys for coeff in poly]
-        
-        return flat_coeffs
+        self._GenerateMinimaxSignCoeffs = HEonGPUFunction(
+            lattigo_lib.GenerateMinimaxSignCoeffs,
+            argtypes=[
+                ctypes.POINTER(ctypes.c_int), ctypes.c_int, # degrees
+                ctypes.c_int, # prec 
+                ctypes.c_int, # logalpha
+                ctypes.c_int, # logerr
+                ctypes.c_int, # debug
+            ],
+            restype=ArrayResultDouble
+        )
+        res = self._GenerateMinimaxSignCoeffs(degrees, prec, logalpha, logerr, debug)
+        print(res)
+        return res
 
 
     #setup_lt_evaluator
@@ -1675,7 +1669,6 @@ class HEonGPULibrary:
         galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, [normalized_step])
         if not galois_key_handle:
             raise RuntimeError(f"Failed to create GaloisKey object for step {rotation_step}")
-        #**Crucially, explicitly move the key's internal buffers to the host BEFORE generating data.**
         status = self.GenerateGaloisKey(
             self.keygenerator_handle,
             galois_key_handle,
@@ -1769,66 +1762,66 @@ class HEonGPULibrary:
     #should generally work (might overshoot)
     BOOTSTRAP_PRESET_CONFIG = {
         # Target Depth: { 'taylor_number', 'CtoS_piece', 'StoC_piece', 'less_key_mode' }
-        # 1: {
-        #     'taylor_number': 7, 
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
+        1: {
+            'taylor_number': 7, 
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
         2: {    #modified
             'taylor_number': 11,    
             'CtoS_piece': 3,    
             'StoC_piece': 3,
             'less_key_mode': True
         },
-        # 3: {
-        #     'taylor_number': 7,
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
-        # 4: {
-        #     'taylor_number': 11,
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
-        # 5: {
-        #     'taylor_number': 11,
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
-        # 6: {
-        #     'taylor_number': 15,
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
-        # 7: {
-        #     'taylor_number': 15,
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
-        # 8: {
-        #     'taylor_number': 15,
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
-        # 9: {
-        #     'taylor_number': 15, # WARNING: Max recommended value reached
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # },
-        # 10: {
-        #     'taylor_number': 15,
-        #     'CtoS_piece': 5,
-        #     'StoC_piece': 5,
-        #     'less_key_mode': False
-        # }
+        3: {
+            'taylor_number': 7,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
+        4: {
+            'taylor_number': 11,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
+        5: {
+            'taylor_number': 11,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
+        6: {
+            'taylor_number': 15,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
+        7: {
+            'taylor_number': 15,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
+        8: {
+            'taylor_number': 15,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
+        9: {
+            'taylor_number': 15, # WARNING: Max recommended value reached
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        },
+        10: {
+            'taylor_number': 15,
+            'CtoS_piece': 5,
+            'StoC_piece': 5,
+            'less_key_mode': False
+        }
     }
     def NewBootstrapper(self, logPs, num_slots):
         #we dont care about the exaxt logPs, or num_slots, just the length. HEonGPU will create the logPs from the parameters given:
