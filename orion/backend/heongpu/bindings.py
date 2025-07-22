@@ -106,7 +106,6 @@ class HEonGPUFunction:
         c_result = self.func(*c_args)
 
         py_result = self.convert_from_ctypes(c_result, type(c_result))
-        print(f"[DEBUG] finished converting from ctypes, result is {py_result}")
         return py_result
 
 
@@ -159,7 +158,6 @@ class HEonGPUFunction:
             return arg 
             
     def convert_from_ctypes(self, res, restype):
-        print(f"[DEBUG] in convert_from_ctypes, res is {res}, type is {restype}")
         if (hasattr(restype, '_type_') and isinstance(restype._type_, type) and issubclass(restype._type_, ctypes.Structure)):
             if not res:
                 return None
@@ -170,7 +168,6 @@ class HEonGPUFunction:
             elif struct_type in (ArrayResultInt, ArrayResultUInt64):
                 return [int(struct.Data[i]) for i in range(struct.Length)]
             elif struct_type == ArrayResultDouble:
-                print(f"[DEBUG] Handling pointer to ArrayResultDouble, struct is {struct}, struct.Data is {struct.Data}, struct.Length is {struct.Length}")
                 if not struct.Data:
                     print("[ERROR] The structure's internal Data pointer is NULL.")
                     return []
@@ -278,6 +275,13 @@ class HEonGPULibrary:
 
         This function binds to the C API functions defined in context_c_api.h.
         """
+        self.HEonGPU_CKKS_SynchronizeDevice = HEonGPUFunction(
+            self.lib.HEonGPU_SynchronizeDevice,
+            argtypes=[             
+            ],
+            restype=ctypes.c_int
+        )
+
         self.HEonGPU_CKKS_Context_Create = HEonGPUFunction(
             self.lib.HEonGPU_CKKS_Context_Create,
             argtypes=[
@@ -796,7 +800,7 @@ class HEonGPULibrary:
             raise ValueError("Input plaintext handle cannot be null.")
         buffer_len = num_slots
         message_buffer = (ctypes.c_double * buffer_len)()
-        print(message_buffer)
+        # print(message_buffer)
         elements_copied = self._Decode(
             self.encoder_handle,
             pt,
@@ -1178,56 +1182,127 @@ class HEonGPULibrary:
         newct = self.NewCiphertext(self.context_handle, None)
         return self._Negate(self.arithmeticoperator_handle, ct, newct, None)
     def Rotate(self, ct, slots):
+        self.HEonGPU_CKKS_SynchronizeDevice()
         newpt = self.Decrypt(ct)
         newval =  self.Decode(newpt)
+        self.DeletePlaintext(newpt)
         print(f"[DEBUG] In Rotate, old value is: {newval[:10]}")
+
         rotation_amount = slots
-        if rotation_amount not in self.rotation_keys_cache:
+        if not hasattr(self, 'consolidated_galois_key_handle'):
+            raise RuntimeError("Consolidated Galois key was not generated before calling RotateNew.")
+
+        if not hasattr(self, 'rotation_keys_cache'):
+            self.rotation_keys_cache = []
+        
+        print(f"Trying to rotat by {rotation_amount}, supportd rotations are {self.normalized_steps}")
+        if(rotation_amount not in self.normalized_steps and rotation_amount not in self.rotation_keys_cache):
+            # Generate Key:
             print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
             try:
                 self.GenerateLinearTransformRotationKey(rotation_amount)
             except Exception as e:
                 raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
 
-        specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
 
-        self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
-        self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
-        self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
-        return ct
+        
+        elif (rotation_amount in self.normalized_steps):  #key exists
+            key_handle = self.consolidated_galois_key_handle
+            self.StoreGaloisKeyInDevice(key_handle, None)
+
+            self.HEonGPU_CKKS_SynchronizeDevice()
+            self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, key_handle, None)
+            
+            self.StoreGaloisKeyInHost(key_handle, None)
+            
+            self.HEonGPU_CKKS_SynchronizeDevice()
+            newpt = self.Decrypt(ct)
+            newval =  self.Decode(newpt)
+            self.DeletePlaintext(newpt)
+            print(f"[DEBUG] In Rotate, new value is: {newval[:10]}")
+            return ct
+        elif (rotation_amount in self.rotation_keys_cache):
+            specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
+            self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
+            self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
+            self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
+            return ct
 
     def RotateNew(self, ct, slots):
+        self.HEonGPU_CKKS_SynchronizeDevice()
         newpt = self.Decrypt(ct)
         newval =  self.Decode(newpt)
+        self.DeletePlaintext(newpt)
         print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
+
         rotation_amount = slots
-        if rotation_amount not in self.rotation_keys_cache:
+        if not hasattr(self, 'consolidated_galois_key_handle'):
+            raise RuntimeError("Consolidated Galois key was not generated before calling RotateNew.")
+
+        if not hasattr(self, 'rotation_keys_cache'):
+            self.rotation_keys_cache = []
+        
+        print(f"Trying to rotat by {rotation_amount}, supportd rotations are {self.normalized_steps}")
+        if(rotation_amount not in self.normalized_steps and rotation_amount not in self.rotation_keys_cache):
+            # Generate Key:
             print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
             try:
                 self.GenerateLinearTransformRotationKey(rotation_amount)
+                self.HEonGPU_CKKS_SynchronizeDevice()
             except Exception as e:
                 raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
 
-        specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
-        self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
 
-        newct_shell = self.NewCiphertext(self.context_handle, None)
-        print("[DEBUG] In bindings.py RotateNew, calling _RotateNew")
-        newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
-        self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
-        newpt = self.Decrypt(newct_result)
-        newval =  self.Decode(newpt)
-        print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
-        if not newct_result:
-            raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
+        #Now, use key
+        if (rotation_amount in self.normalized_steps):  #key exists
+            key_handle = self.consolidated_galois_key_handle
+            self.StoreGaloisKeyInDevice(key_handle, None)
 
-        return newct_result
+            newct_shell = self.NewCiphertext(self.context_handle, None)
+            self.HEonGPU_CKKS_SynchronizeDevice()
+            newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, key_handle, None)
+            
+            self.StoreGaloisKeyInHost(key_handle, None)
+            
+            if not newct_result:
+                raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
+            self.HEonGPU_CKKS_SynchronizeDevice()
+            newpt = self.Decrypt(newct_result)
+            newval =  self.Decode(newpt)
+            self.DeletePlaintext(newpt)
+            print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
+            return newct_result
+        elif (rotation_amount in self.rotation_keys_cache):
+            specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
+            newct_shell = self.NewCiphertext(self.context_handle, None)
+            self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
+            self.HEonGPU_CKKS_SynchronizeDevice()
+            newct = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
+            self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
+            self.HEonGPU_CKKS_SynchronizeDevice()
+            newpt = self.Decrypt(newct)
+            newval =  self.Decode(newpt)
+            self.DeletePlaintext(newpt)
+            print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
+            return newct
+
+
+
+
+
+
+
 
 
 
 
 
     def Rescale(self, ct):
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        self.DeletePlaintext(newpt)
+        print(f"[DEBUG] In Rescale, old value is: {newval[:10]}")
+        self.HEonGPU_CKKS_SynchronizeDevice()
         ct = ct.values if isinstance(ct, CipherTensor) else ct
 
         print(f"[DEBUG] In bindings.py Rescale, address of ct: {id(ct)}")
@@ -1236,8 +1311,18 @@ class HEonGPULibrary:
         self._Rescale(self.arithmeticoperator_handle, ct, None)
         if not ct:
             raise RuntimeError(f"The C++ Rescale_Inplace operation failed.")
+
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        self.DeletePlaintext(newpt)
+        print(f"[DEBUG] In Rescale, new value is: {newval[:10]}")
         return ct
     def RescaleNew(self, ct):
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        self.DeletePlaintext(newpt)
+        print(f"[DEBUG] In RescaleNew, old value is: {newval[:10]}")
+        self.HEonGPU_CKKS_SynchronizeDevice()
         cloned_ct = self.CloneCiphertext(ct)
         if not cloned_ct:
             raise RuntimeError("Failed to clone ciphertext in RescaleNew.")
@@ -1331,16 +1416,16 @@ class HEonGPULibrary:
         pt_depth = self.GetPlaintextDepth(pt)
         print(f"    Ciphertext Level (remaining moduli): {ct_level}")
         print(f"    Plaintext Depth (consumed moduli): {pt_depth}")
-        oldpt = self.Decrypt(ct)
-        oldval =  self.Decode(oldpt)
-        print(f"[DEBUG] In AddPlaintext, old value is: {oldval[:10]}")
+        # oldpt = self.Decrypt(ct)
+        # oldval =  self.Decode(oldpt)
+        # print(f"[DEBUG] In AddPlaintext, old value is: {oldval[:10]}")
         
 
         print("--- [DEBUG] Calling backend _AddPlaintext ---")
         ret = self._AddPlaintext(self.arithmeticoperator_handle, ct, pt, None)
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        print(f"[DEBUG] In AddPlaintext, new value is: {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # print(f"[DEBUG] In AddPlaintext, new value is: {newval[:10]}")
 
         return ret
 
@@ -1357,9 +1442,7 @@ class HEonGPULibrary:
         ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
         print("Decoding in Multi")
-        x = self.Decode(pt)
-        print("Are all values the same?")
-        print((len(set(x)) <= 1) and x[0] == 0)
+        
         if ct_depth > pt_depth:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth - pt_depth):
@@ -1371,21 +1454,7 @@ class HEonGPULibrary:
         newct_shell = self.NewCiphertext(self.context_handle, None)
         ct_depth = self.GetCiphertextDepth(ct)
         pt_depth = self.GetPlaintextDepth(pt)
-        print("Decoding in MultiNew")
-        x = self.Decode(pt)
-        print("Are all values of pt the same?")
-        print((len(set(x)) <= 1) and x[0] == 0)
-        if(not((len(set(x)) <= 1) and x[0] == 0)):
-            print(x[:10])
-
-
-        print("Decrypting In MultiNew")
-        pt_out_handle = self.Decrypt(ct)
-        x = self.Decode(pt_out_handle)
-        print("Are all values of ct the same?")
-        print((len(set(x)) <= 1) and x[0] == 0)
-        if(not((len(set(x)) <= 1) and x[0] == 0)):
-            print(x[:10])
+        
         if ct_depth > pt_depth:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
             for _ in range(ct_depth - pt_depth):
@@ -1430,12 +1499,12 @@ class HEonGPULibrary:
             newct_shell = self.NewCiphertext(self.context_handle, None)
 
 
-            midpt = self.Decrypt(ct1_to_add)
-            midval =  self.Decode(midpt)
-            midpt2 = self.Decrypt(ct2_to_add)
-            midval2 =  self.Decode(midpt2)
-            print(f"[DEBUG] In AddCiphertextNew, adding {midval[:10]} with {midval2[:10]}")
-            print(f"[DEBUG] In AddCiphertextNew, ct1 has scale {self.GetCiphertextScale(ct1)}, ct2 has scale {self.GetCiphertextScale(ct2)}")
+            # midpt = self.Decrypt(ct1_to_add)
+            # midval =  self.Decode(midpt)
+            # midpt2 = self.Decrypt(ct2_to_add)
+            # midval2 =  self.Decode(midpt2)
+            # print(f"[DEBUG] In AddCiphertextNew, adding {midval[:10]} with {midval2[:10]}")
+            # print(f"[DEBUG] In AddCiphertextNew, ct1 has scale {self.GetCiphertextScale(ct1)}, ct2 has scale {self.GetCiphertextScale(ct2)}")
             newct_result = self._AddCiphertextNew(
                 self.arithmeticoperator_handle,
                 ct1_to_add,
@@ -1443,9 +1512,9 @@ class HEonGPULibrary:
                 newct_shell,
                 None
             )
-            endpt = self.Decrypt(newct_result)
-            endval =  self.Decode(endpt)
-            print(f"[DEBUG] In AddCiphertextNew, end is {endval[:10]}")
+            # endpt = self.Decrypt(newct_result)
+            # endval =  self.Decode(endpt)
+            # print(f"[DEBUG] In AddCiphertextNew, end is {endval[:10]}")
             if not newct_result:
                 raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Add failed and returned a null pointer.")
 
@@ -1570,6 +1639,7 @@ class HEonGPULibrary:
         newpt = self.Decrypt(ctxt_in_handle)
         newval =  self.Decode(newpt)
         print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
+        self.HEonGPU_CKKS_SynchronizeDevice()
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
         
@@ -1580,7 +1650,9 @@ class HEonGPULibrary:
         accumulator_ctxt = self.Encrypt(zero_ptxt)
         self.DeletePlaintext(zero_ptxt) # This plaintext is no longer needed.
         for diag_idx, diag_coeffs in diagonals.items():
+            self.HEonGPU_CKKS_SynchronizeDevice()
             rotated_ctxt = self.RotateNew(ctxt_in_handle, diag_idx)
+            self.HEonGPU_CKKS_SynchronizeDevice()
             diag_ptxt = self.Encode(diag_coeffs, level=self.GetCiphertextLevel(rotated_ctxt), scale=initial_scale)
             
             if not rotated_ctxt or not diag_ptxt:
@@ -1588,23 +1660,26 @@ class HEonGPULibrary:
             
             print(f"[EVALUATELINEARTRANSFORM MIDDLE rotated_ctxt scale - {self.GetCiphertextScale(rotated_ctxt)} diag_ptxt scale - {self.GetPlaintextScale(diag_ptxt)}")
             term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
+            self.HEonGPU_CKKS_SynchronizeDevice()
             self.Rescale(term_ctxt)
             print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt scale - {self.GetCiphertextScale(term_ctxt)}")
             # term_ctxt = self.SetCiphertextScale(term_ctxt, self.GetCiphertextScale(accumulator_ctxt))
             if not term_ctxt:
                 raise RuntimeError("Failed to multiply rotated ciphertext and diagonal plaintext.")
 
-            midpt2 = self.Decrypt(accumulator_ctxt)
-            midval2 =  self.Decode(midpt2)
-            midpt3 = self.Decrypt(term_ctxt)
-            midval3 =  self.Decode(midpt3)
-            print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
-            print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
+            self.HEonGPU_CKKS_SynchronizeDevice()
+            # midpt2 = self.Decrypt(accumulator_ctxt)
+            # midval2 =  self.Decode(midpt2)
+            # midpt3 = self.Decrypt(term_ctxt)
+            # midval3 =  self.Decode(midpt3)
+            # print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
+            # print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
             new_accumulator_ctxt = self.AddCiphertextNew(accumulator_ctxt, term_ctxt)
-            midpt = self.Decrypt(new_accumulator_ctxt)
-            midval =  self.Decode(midpt)
+            # midpt = self.Decrypt(new_accumulator_ctxt)
+            # midval =  self.Decode(midpt)
             
-            print(f"[EVALUATELINEARTRANSFORM MIDDLE new_accumulator_ctxt - {midval[:10]}")
+            # print(f"[EVALUATELINEARTRANSFORM MIDDLE new_accumulator_ctxt - {midval[:10]}")
+            self.HEonGPU_CKKS_SynchronizeDevice()
             if not new_accumulator_ctxt:
                 raise RuntimeError("Failed to add term to accumulator.")
 
@@ -1620,6 +1695,7 @@ class HEonGPULibrary:
         newpt = self.Decrypt(accumulator_ctxt)
         newval =  self.Decode(newpt)
         print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
+        self.HEonGPU_CKKS_SynchronizeDevice()
         return accumulator_ctxt
         
 
@@ -1680,6 +1756,30 @@ class HEonGPULibrary:
             raise RuntimeError(f"HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey failed for step {rotation_step} with status {status}")
         self.StoreGaloisKeyInHost(galois_key_handle, None) # Using null stream
         self.rotation_keys_cache[rotation_step] = galois_key_handle
+
+    def GenerateConsolidatedRotationKeys(self, rotation_steps: list):
+        if hasattr(self, 'consolidated_galois_key_handle'):
+            return
+        num_slots = self.poly_degree // 2
+        normalized_steps = [step % num_slots for step in rotation_steps]
+        self.normalized_steps = normalized_steps
+        print(f"INFO: Generating a single consolidated Galois key for {len(normalized_steps)} rotations.")
+        galois_key_handle = self.CreateGaloisKeyWithShifts(self.context_handle, normalized_steps)
+        if not galois_key_handle:
+            raise RuntimeError(f"Failed to create consolidated GaloisKey object.")
+
+        status = self.GenerateGaloisKey(
+            self.keygenerator_handle,
+            galois_key_handle,
+            self.secretkey_handle,
+            None
+        )
+        if status != 0:
+            self.DeleteGaloisKey(galois_key_handle)
+            raise RuntimeError(f"HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey failed for consolidated key with status {status}")
+
+        self.StoreGaloisKeyInHost(galois_key_handle, None)
+        self.consolidated_galois_key_handle = galois_key_handle
 
 
 

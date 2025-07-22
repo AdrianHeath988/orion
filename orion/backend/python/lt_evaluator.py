@@ -67,8 +67,14 @@ class NewEvaluator:
 
         #Keep all keys in ram for now
         # if self.io_mode == "none":
-        for key in keys_to_gen:
-            self.backend.GenerateLinearTransformRotationKey(key)
+        # for key in keys_to_gen:
+        #     self.backend.GenerateLinearTransformRotationKey(key)
+
+
+        keys_to_gen_list = list(keys_to_gen)
+        if keys_to_gen_list: # Only call if there are new keys to generate
+            # This makes a single call with all required keys.
+            self.backend.GenerateConsolidatedRotationKeys(keys_to_gen_list)
 
         # elif self.io_mode == "save":
         #     with h5py.File(self.keys_path, "a") as f:
