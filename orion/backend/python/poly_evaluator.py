@@ -20,7 +20,7 @@ class NewEvaluator:
     def generate_chebyshev(self, coeffs):
         if isinstance(coeffs, (torch.Tensor, np.ndarray)):
             coeffs = coeffs.tolist()
-        return self.backend.GenerateChebyshev(coeffs)
+        return self.backend.GenerateChebyshev(coeffs, len(coeffs))
 
     def evaluate_polynomial(self, ciphertensor, poly, out_scale=None):
         out_scale = out_scale or self.scheme.params.get_default_scale()

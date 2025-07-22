@@ -1216,10 +1216,10 @@ class HEonGPULibrary:
             self.StoreGaloisKeyInHost(key_handle, None)
             
             self.HEonGPU_CKKS_SynchronizeDevice()
-            newpt = self.Decrypt(ct)
-            newval =  self.Decode(newpt)
-            self.DeletePlaintext(newpt)
-            print(f"[DEBUG] In Rotate, new value is: {newval[:10]}")
+            # newpt = self.Decrypt(ct)
+            # newval =  self.Decode(newpt)
+            # self.DeletePlaintext(newpt)
+            # print(f"[DEBUG] In Rotate, new value is: {newval[:10]}")
             return ct
         elif (rotation_amount in self.rotation_keys_cache):
             specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
@@ -1230,10 +1230,10 @@ class HEonGPULibrary:
 
     def RotateNew(self, ct, slots):
         self.HEonGPU_CKKS_SynchronizeDevice()
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        self.DeletePlaintext(newpt)
-        print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # self.DeletePlaintext(newpt)
+        # print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
 
         rotation_amount = slots
         if not hasattr(self, 'consolidated_galois_key_handle'):
@@ -1267,10 +1267,10 @@ class HEonGPULibrary:
             if not newct_result:
                 raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
             self.HEonGPU_CKKS_SynchronizeDevice()
-            newpt = self.Decrypt(newct_result)
-            newval =  self.Decode(newpt)
-            self.DeletePlaintext(newpt)
-            print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
+            # newpt = self.Decrypt(newct_result)
+            # newval =  self.Decode(newpt)
+            # self.DeletePlaintext(newpt)
+            # print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
             return newct_result
         elif (rotation_amount in self.rotation_keys_cache):
             specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
@@ -1280,10 +1280,10 @@ class HEonGPULibrary:
             newct = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
             self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
             self.HEonGPU_CKKS_SynchronizeDevice()
-            newpt = self.Decrypt(newct)
-            newval =  self.Decode(newpt)
-            self.DeletePlaintext(newpt)
-            print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
+            # newpt = self.Decrypt(newct)
+            # newval =  self.Decode(newpt)
+            # self.DeletePlaintext(newpt)
+            # print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
             return newct
 
 
@@ -1298,10 +1298,10 @@ class HEonGPULibrary:
 
 
     def Rescale(self, ct):
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        self.DeletePlaintext(newpt)
-        print(f"[DEBUG] In Rescale, old value is: {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # self.DeletePlaintext(newpt)
+        # print(f"[DEBUG] In Rescale, old value is: {newval[:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         ct = ct.values if isinstance(ct, CipherTensor) else ct
 
@@ -1312,16 +1312,16 @@ class HEonGPULibrary:
         if not ct:
             raise RuntimeError(f"The C++ Rescale_Inplace operation failed.")
 
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        self.DeletePlaintext(newpt)
-        print(f"[DEBUG] In Rescale, new value is: {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # self.DeletePlaintext(newpt)
+        # print(f"[DEBUG] In Rescale, new value is: {newval[:10]}")
         return ct
     def RescaleNew(self, ct):
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        self.DeletePlaintext(newpt)
-        print(f"[DEBUG] In RescaleNew, old value is: {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # self.DeletePlaintext(newpt)
+        # print(f"[DEBUG] In RescaleNew, old value is: {newval[:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         cloned_ct = self.CloneCiphertext(ct)
         if not cloned_ct:
@@ -1467,9 +1467,9 @@ class HEonGPULibrary:
     
     def MulPlaintextNew(self, ct, pt):
         
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        print(f"[DEBUG], in MulPlaintextNew - {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # print(f"[DEBUG], in MulPlaintextNew - {newval[:10]}")
         return self.MulPlainNew(ct, pt)
     
     def AddCiphertext(self, ct1, ct2):
@@ -1636,9 +1636,9 @@ class HEonGPULibrary:
 
 
     def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
-        newpt = self.Decrypt(ctxt_in_handle)
-        newval =  self.Decode(newpt)
-        print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
+        # newpt = self.Decrypt(ctxt_in_handle)
+        # newval =  self.Decode(newpt)
+        # print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
@@ -1692,9 +1692,9 @@ class HEonGPULibrary:
             # Update the accumulator to point to the new sum.
             accumulator_ctxt = new_accumulator_ctxt
 
-        newpt = self.Decrypt(accumulator_ctxt)
-        newval =  self.Decode(newpt)
-        print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
+        # newpt = self.Decrypt(accumulator_ctxt)
+        # newval =  self.Decode(newpt)
+        # print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         return accumulator_ctxt
         
@@ -1863,64 +1863,64 @@ class HEonGPULibrary:
     BOOTSTRAP_PRESET_CONFIG = {
         # Target Depth: { 'taylor_number', 'CtoS_piece', 'StoC_piece', 'less_key_mode' }
         1: {
-            'taylor_number': 7, 
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
-        2: {    #modified
-            'taylor_number': 11,    
-            'CtoS_piece': 3,    
+        2: { 
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         3: {
-            'taylor_number': 7,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
         4: {
-            'taylor_number': 11,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
         5: {
-            'taylor_number': 11,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
         6: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
         7: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
         8: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
         9: {
-            'taylor_number': 15, # WARNING: Max recommended value reached
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         },
         10: {
-            'taylor_number': 15,
-            'CtoS_piece': 5,
-            'StoC_piece': 5,
-            'less_key_mode': False
+            'taylor_number': 6, 
+            'CtoS_piece': 3,
+            'StoC_piece': 3,
+            'less_key_mode': True
         }
     }
     def NewBootstrapper(self, logPs, num_slots):
@@ -1955,9 +1955,11 @@ class HEonGPULibrary:
         )
 
     def Bootstrap(self, ct, num_slots):
+        
         print("[DEBUG] Bootsrapping!")
         print("[DEBUG] Entering Python binding for Bootstrap.")
-        
+        self.NewBootstrapper([60, 60], -1)  #delete later, but good for testing
+        #Try to replicate the bootstrapping example from HEonGPU, key is to look at bindings and params/setup to ensure everything works (liekly doest)
         required_level = 1
         total_levels = self.q_size
 
@@ -1993,15 +1995,14 @@ class HEonGPULibrary:
         print("[DEBUG]   - Output of _GetBootstrappingKeyIndices:")
         print(f"[DEBUG]     - Status: {status}")
         print(f"[DEBUG]     - Count of indices: {count.value}")
-        if indices_ptr and count.value > 0:
-            num_indices_to_print = min(10, count.value)
-            indices_list = [indices_ptr[i] for i in range(num_indices_to_print)]
-            print(f"[DEBUG]     - First {num_indices_to_print} indices: {indices_list}")
+
+            
+        indices_list = [indices_ptr[i] for i in range(count.value)]
+        print(f"[DEBUG]     -  indices: {indices_list}")
 
         galois_key_handle = self.CreateGaloisKeyWithShifts(
             self.context_handle,
-            indices_ptr,
-            count
+            indices_list
         )
         print("[DEBUG]   - Output of CreateGaloisKeyWithShifts:")
         print(f"[DEBUG]     - Galois Key Handle: {galois_key_handle}")

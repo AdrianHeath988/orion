@@ -131,6 +131,7 @@ class Bootstrap(Module):
         print(f"    - Final Scale: {final_scale:.4e}\n")
         print(f"[DEBUG] Step 4: Ciphertext is at depth {final_depth}. Calling bootstrap...")
         print(f"    - Type BEFORE bootstrap call: {type(test_ct)}")
+        backend.HEonGPU_CKKS_SynchronizeDevice()
         bootstrapped_ct = test_ct.bootstrap()
         print(f"    - Type AFTER bootstrap call: {type(bootstrapped_ct)}")
 

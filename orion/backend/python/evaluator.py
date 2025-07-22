@@ -71,10 +71,7 @@ class NewEvaluator:
         else:
             ct_out = self.backend.MulPlaintextNew(ctxt, ptxt) 
         newct =  self.backend.Rescale(ct_out)
-        check_pt = newct.decrypt()
-        check = check_pt.decode()
-        print("In mul_plaintext")
-        print(check)
+        
         return newct
 
     def add_ciphertext(self, ctxt0, ctxt1, in_place):

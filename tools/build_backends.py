@@ -182,7 +182,7 @@ def build(setup_kwargs=None):
             env["GOARCH"] = "amd64"
 
     # Build Lattigo
-    #build_lattigo(root_dir, env.copy()) # Pass a copy of env in case functions modify it
+    build_lattigo(root_dir, env.copy()) # Pass a copy of env in case functions modify it
     # Build HEonGPU
     # HEonGPU doesn't need GOARCH, CGO_ENABLED from Lattigo's specific env settings.
     # It will use the general os.environ copy, unless specific env vars are needed for CMake/CUDA.

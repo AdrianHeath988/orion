@@ -2,9 +2,9 @@ comment: "ResNet Parameter Set"
 
 ckks_params:
   LogN: 16
-  LogQ: [55, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40]
-  LogP: [61, 61, 61]
-  LogScale: 40
+  LogQ: [60, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]
+  LogP: [60, 60]
+  LogScale: 30
   H: 192
   RingType: standard
 
@@ -14,7 +14,7 @@ boot_params:
 orion:
   margin: 2 # >= 1
   embedding_method: hybrid # [hybrid, square]
-  backend: lattigo # [lattigo, openfhe, heaan]
+  backend: heongpu # [lattigo, openfhe, heaan]
 
   fuse_modules: true
   debug: true
