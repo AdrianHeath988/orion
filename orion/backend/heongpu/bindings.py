@@ -355,7 +355,7 @@ class HEonGPULibrary:
 
         
         # HEonGPU parameters (using CKKS defaults where applicable)
-        keyswitch_method = 1 
+        keyswitch_method = 2 
         sec_level = 128
         
         context_handle = self.HEonGPU_CKKS_Context_Create(keyswitch_method, sec_level)
@@ -378,7 +378,9 @@ class HEonGPULibrary:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
             raise RuntimeError(f"Failed to set HEonGPU coefficient modulus bit-sizes. Status: {result_modulus}")
         print("INFO: Generating HEonGPU context with specified parameters...")
+
         result_generate = self.HEonGPU_CKKS_Context_Generate(context_handle)
+        
         if result_generate != 0:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
             raise RuntimeError(f"Failed to generate HEonGPU context parameters. Status: {result_generate}")
@@ -1149,6 +1151,29 @@ class HEonGPULibrary:
             ],
             restype=None  # The C++ function returns void
         )
+        self._TestBootstrap = HEonGPUFunction(
+            self.lib.HEonGPU_CKKS_BootstrapTest,
+            argtypes=[
+                ctypes.POINTER(HE_CKKS_Context),
+                ctypes.POINTER(HE_CKKS_ArithmeticOperator),
+                ctypes.POINTER(HE_CKKS_KeyGenerator),
+                ctypes.POINTER(HE_CKKS_SecretKey),
+                ctypes.POINTER(HE_CKKS_RelinKey),
+                ctypes.POINTER(HE_CKKS_Encoder),
+                ctypes.POINTER(HE_CKKS_Encryptor)
+            ],
+            restype=None 
+        )
+
+    def TestBootstrap(self):
+        self._TestBootstrap(self.context_handle,
+                            self.arithmeticoperator_handle,
+                            self.keygenerator_handle,
+                            self.secretkey_handle,
+                            self.relinkey_handle,
+                            self.encoder_handle,
+                            self.encryptor_handle)
+        return 0
 
     def ModDropCiphertextInplace(self, ct):
         if not self.arithmeticoperator_handle:
@@ -1190,7 +1215,7 @@ class HEonGPULibrary:
 
         rotation_amount = slots
         if not hasattr(self, 'consolidated_galois_key_handle'):
-            raise RuntimeError("Consolidated Galois key was not generated before calling RotateNew.")
+            raise RuntimeError("Consolidated Galois key was not generated before calling Rotate.")
 
         if not hasattr(self, 'rotation_keys_cache'):
             self.rotation_keys_cache = []
@@ -1198,11 +1223,26 @@ class HEonGPULibrary:
         print(f"Trying to rotat by {rotation_amount}, supportd rotations are {self.normalized_steps}")
         if(rotation_amount not in self.normalized_steps and rotation_amount not in self.rotation_keys_cache):
             # Generate Key:
-            print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
-            try:
-                self.GenerateLinearTransformRotationKey(rotation_amount)
-            except Exception as e:
-                raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
+            # print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
+            # try:
+            #     self.GenerateLinearTransformRotationKey(rotation_amount)
+            # except Exception as e:
+            #     raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
+            # Use power of 2 rotations
+            powers = []
+            power_of_2 = 1
+            n = rotation_amount
+            while n > 0:
+                if n & 1:
+                    powers.append(power_of_2)
+                n >>= 1  # Right-shift n to check the next bit
+                power_of_2 <<= 1  # Left-shift power_of_2 to double it
+
+            for rot in powers:
+                self.Rotate(ct, rot)
+            
+            return ct
+
 
 
         
@@ -1245,12 +1285,27 @@ class HEonGPULibrary:
         print(f"Trying to rotat by {rotation_amount}, supportd rotations are {self.normalized_steps}")
         if(rotation_amount not in self.normalized_steps and rotation_amount not in self.rotation_keys_cache):
             # Generate Key:
-            print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
-            try:
-                self.GenerateLinearTransformRotationKey(rotation_amount)
-                self.HEonGPU_CKKS_SynchronizeDevice()
-            except Exception as e:
-                raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
+            # print(f"WARNING: On-the-fly key generation for rotation {rotation_amount}. This will be slow.")
+            # try:
+            #     self.GenerateLinearTransformRotationKey(rotation_amount)
+            #     self.HEonGPU_CKKS_SynchronizeDevice()
+            # except Exception as e:
+            #     raise RuntimeError(f"On-the-fly key generation failed for rotation {rotation_amount}.") from e
+            # Use power of 2 rotations
+            powers = []
+            power_of_2 = 1
+            n = rotation_amount
+            while n > 0:
+                if n & 1:
+                    powers.append(power_of_2)
+                n >>= 1  # Right-shift n to check the next bit
+                power_of_2 <<= 1  # Left-shift power_of_2 to double it
+
+            newct = self.RotateNew(ct, powers[0])
+            powers.pop(0)
+            for rot in powers:
+                self.Rotate(newct, rot)
+            return newct
 
 
         #Now, use key
@@ -1565,6 +1620,7 @@ class HEonGPULibrary:
         #for Chebyshev we will treat it as the same for now, but in the future we can optimize by using Clenshaw's Algorithm
         #Horner's method: y = ((...((c_d*x + c_{d-1})*x + ...)*x + c_0)
         #The list is assumed to be [c_0, c_1, ..., c_d], so we process it backwards
+        print("[DEBUG] In EvaluatePolynomial")
         coeffs = self.polys[poly_id]
         degree = len(coeffs) - 1
         current_scale = self.GetCiphertextScale(ctxt_in_handle)
@@ -1573,12 +1629,12 @@ class HEonGPULibrary:
         result_ctxt_handle = self.Encrypt(highest_coeff_ptxt)
         self.DeletePlaintext(highest_coeff_ptxt)
         for i in range(degree - 1, -1, -1):
-            self.MulRelin_Inplace(result_ctxt_handle, ctxt_in_handle)
-            self.Rescale_Inplace(result_ctxt_handle)
+            self.MulRelinCiphertext(result_ctxt_handle, ctxt_in_handle)
+            self.Rescale(result_ctxt_handle)
             next_coeff = coeffs[i]
             rescaled_scale = self.GetCiphertextScale(result_ctxt_handle)
             coeff_ptxt = self.Encode([next_coeff], level=self.GetCiphertextLevel(result_ctxt_handle), scale=rescaled_scale)
-            self.AddPlain_Inplace(result_ctxt_handle, coeff_ptxt)
+            self.AddPlaintext(result_ctxt_handle, coeff_ptxt)
             self.DeletePlaintext(coeff_ptxt)
         return result_ctxt_handle
 
@@ -1644,6 +1700,7 @@ class HEonGPULibrary:
         diagonals = plan['diagonals']
         
         initial_scale = self.scale
+        self.Rescale(ctxt_in_handle)
         initial_level = self.GetCiphertextLevel(ctxt_in_handle)
         num_slots = self.GetCiphertextSlots(ctxt_in_handle)
         zero_ptxt = self.Encode([0.0] * num_slots, level=initial_level, scale=initial_scale)
@@ -1715,15 +1772,17 @@ class HEonGPULibrary:
 
     def GetLinearTransformRotationKeys(self, transform_id):
         #inspects a compiled transform and returns the list of required rotation indices
-
+        self.HEonGPU_CKKS_SynchronizeDevice()
+        self.TestBootstrap()
         plan = self.linear_transforms[transform_id]
         #the diagonal indices are the rotation indices needed
         #rotation by 0 is a conjugation, requires specific galois key
         #Lattigo convention represent this with the Galois element for N+1
         #but we use a simple mapping: rotation_step=0 -> galois_elt=0 (placeholder)
-        required_rotations = list(plan['diagonals'].keys())
+        # required_rotations = list(plan['diagonals'].keys())
+        required_rotations = []
         #also generate all powers of 2
-        i = 2
+        i = 1
         while i <= self.poly_degree // 2:
             if i not in required_rotations:
                 required_rotations.append(i)
@@ -1758,6 +1817,8 @@ class HEonGPULibrary:
         self.rotation_keys_cache[rotation_step] = galois_key_handle
 
     def GenerateConsolidatedRotationKeys(self, rotation_steps: list):
+        #given list, split into consolidated keys of 10 rotations each
+        # not done
         if hasattr(self, 'consolidated_galois_key_handle'):
             return
         num_slots = self.poly_degree // 2
@@ -1924,6 +1985,7 @@ class HEonGPULibrary:
         }
     }
     def NewBootstrapper(self, logPs, num_slots):
+        return
         #we dont care about the exaxt logPs, or num_slots, just the length. HEonGPU will create the logPs from the parameters given:
         print(logPs)
         length = len(logPs)
