@@ -1293,10 +1293,10 @@ class HEonGPULibrary:
 
     def RotateNew(self, ct, slots):
         self.HEonGPU_CKKS_SynchronizeDevice()
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        self.DeletePlaintext(newpt)
-        print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # self.DeletePlaintext(newpt)
+        # print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
 
         rotation_amount = slots
 
@@ -1345,10 +1345,10 @@ class HEonGPULibrary:
             if not newct_result:
                 raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
             self.HEonGPU_CKKS_SynchronizeDevice()
-            newpt = self.Decrypt(newct_result)
-            newval =  self.Decode(newpt)
-            self.DeletePlaintext(newpt)
-            print(f"[DEBUG] In RotateNew1, new value is: {newval[:10]}")
+            # newpt = self.Decrypt(newct_result)
+            # newval =  self.Decode(newpt)
+            # self.DeletePlaintext(newpt)
+            # print(f"[DEBUG] In RotateNew1, new value is: {newval[:10]}")
             return newct_result
         elif (rotation_amount in self.rotation_keys_cache):
             specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
@@ -1358,10 +1358,10 @@ class HEonGPULibrary:
             newct = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
             # self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
             self.HEonGPU_CKKS_SynchronizeDevice()
-            newpt = self.Decrypt(newct)
-            newval =  self.Decode(newpt)
-            self.DeletePlaintext(newpt)
-            print(f"[DEBUG] In RotateNew2, new value is: {newval[:10]}")
+            # newpt = self.Decrypt(newct)
+            # newval =  self.Decode(newpt)
+            # self.DeletePlaintext(newpt)
+            # print(f"[DEBUG] In RotateNew2, new value is: {newval[:10]}")
             return newct
 
 
@@ -1716,15 +1716,15 @@ class HEonGPULibrary:
 
 
     def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
-        newpt = self.Decrypt(ctxt_in_handle)
-        newval =  self.Decode(newpt)
-        print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
+        # newpt = self.Decrypt(ctxt_in_handle)
+        # newval =  self.Decode(newpt)
+        # print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
         
         initial_scale = self.scale
-        # self.Rescale(ctxt_in_handle)
+        self.Rescale(ctxt_in_handle)
         initial_level = self.GetCiphertextLevel(ctxt_in_handle)
         num_slots = self.GetCiphertextSlots(ctxt_in_handle)
         zero_ptxt = self.Encode([0.0] * num_slots, level=initial_level, scale=initial_scale)
@@ -1742,10 +1742,11 @@ class HEonGPULibrary:
                 raise RuntimeError("Failed to create rotated ciphertext or diagonal plaintext.")
             
             print(f"[EVALUATELINEARTRANSFORM MIDDLE rotated_ctxt scale - {self.GetCiphertextScale(rotated_ctxt)} diag_ptxt scale - {self.GetPlaintextScale(diag_ptxt)}")
-            newpt = self.Decrypt(rotated_ctxt)
-            newval =  self.Decode(newpt)
-            print(f"[EVALUATELINEARTRANSFORM MIDDLE Multiplying diag_coeffs - {diag_coeffs[0:10]} by rotated_ctxt - {newval[0:10]}")
-            term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
+            # newpt = self.Decrypt(rotated_ctxt)
+            # newval =  self.Decode(newpt)
+            # print(f"[EVALUATELINEARTRANSFORM MIDDLE Multiplying diag_coeffs - {diag_coeffs[0:10]} by rotated_ctxt - {newval[0:10]}")
+            self.MulPlaintext(rotated_ctxt, diag_ptxt)
+            term_ctxt = rotated_ctxt
             self.HEonGPU_CKKS_SynchronizeDevice()
             self.Rescale(term_ctxt)
             print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt scale - {self.GetCiphertextScale(term_ctxt)}")
@@ -1754,33 +1755,30 @@ class HEonGPULibrary:
                 raise RuntimeError("Failed to multiply rotated ciphertext and diagonal plaintext.")
 
             self.HEonGPU_CKKS_SynchronizeDevice()
-            midpt2 = self.Decrypt(accumulator_ctxt)
-            midval2 =  self.Decode(midpt2)
-            midpt3 = self.Decrypt(term_ctxt)
-            midval3 =  self.Decode(midpt3)
-            print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
-            print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
-            new_accumulator_ctxt = self.AddCiphertextNew(accumulator_ctxt, term_ctxt)
-            midpt = self.Decrypt(new_accumulator_ctxt)
-            midval =  self.Decode(midpt)
+            # midpt2 = self.Decrypt(accumulator_ctxt)
+            # midval2 =  self.Decode(midpt2)
+            # midpt3 = self.Decrypt(term_ctxt)
+            # midval3 =  self.Decode(midpt3)
+            # print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
+            # print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
+            self.AddCiphertext(accumulator_ctxt, term_ctxt)
+            # midpt = self.Decrypt(new_accumulator_ctxt)
+            # midval =  self.Decode(midpt)
             
-            print(f"[EVALUATELINEARTRANSFORM MIDDLE new_accumulator_ctxt - {midval[:10]}")
+            # print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval[:10]}")
             self.HEonGPU_CKKS_SynchronizeDevice()
-            if not new_accumulator_ctxt:
+            if not accumulator_ctxt:
                 raise RuntimeError("Failed to add term to accumulator.")
 
-            self.DeleteCiphertext(accumulator_ctxt)
             self.DeletePlaintext(diag_ptxt)
             self.DeleteCiphertext(term_ctxt)
             if diag_idx != 0:
                 self.DeleteCiphertext(rotated_ctxt)
 
-            # Update the accumulator to point to the new sum.
-            accumulator_ctxt = new_accumulator_ctxt
 
-        newpt = self.Decrypt(accumulator_ctxt)
-        newval =  self.Decode(newpt)
-        print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
+        # newpt = self.Decrypt(accumulator_ctxt)
+        # newval =  self.Decode(newpt)
+        # print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         return accumulator_ctxt
         
@@ -2079,9 +2077,9 @@ class HEonGPULibrary:
         
         print("[DEBUG] Bootsrapping!")
         print("[DEBUG] Entering Python binding for Bootstrap.")
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        print(f"[DEBUG], before Bootstrap - {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # print(f"[DEBUG], before Bootstrap - {newval[:10]}")
         # self.NewBootstrapper([60, 60], -1)  #delete later, but good for testing
         #Try to replicate the bootstrapping example from HEonGPU, key is to look at bindings and params/setup to ensure everything works (liekly doest)
         required_level = 1
@@ -2123,9 +2121,9 @@ class HEonGPULibrary:
         if not bootstrapped_ct:
             raise RuntimeError("The C++ RegularBootstrapping operation failed and returned a null pointer.")
 
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        print(f"[DEBUG], before Bootstrap - {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # print(f"[DEBUG], before Bootstrap - {newval[:10]}")
         print("[DEBUG] Finished Bootstrapping!")
         return bootstrapped_ct
 

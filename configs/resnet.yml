@@ -1,8 +1,8 @@
 comment: "ResNet Parameter Set"
 
 ckks_params:
-  LogN: 15
-  LogQ: [60, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]    #need 26 total for bootstrapping(including 60)
+  LogN: 13
+  LogQ: [60, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]    #need 26 total for bootstrapping(including 60)
   LogP: [60, 60]
   LogScale: 30
   H: 192
