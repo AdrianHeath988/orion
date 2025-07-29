@@ -67,12 +67,8 @@ class Bootstrap(Module):
     def forward(self, x):
         #Hijak this function for a test:
 
-        print("\n[DEBUG] --- RUNNING ISOLATED BOOTSTRAP TEST ---")
         
         backend = x.evaluator.backend
-        backend.TestBootstrap()
-
-        x = 1/0
 
 
 

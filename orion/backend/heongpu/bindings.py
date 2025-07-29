@@ -86,6 +86,26 @@ class HEonGPUFunction:
 
     def __call__(self, *args):
         # This is the corrected __call__ method, modeled on the Lattigo wrapper.
+        # if torch.cuda.is_available():
+        #     device = torch.device("cuda")
+        #     allocated_mem_mb = torch.cuda.memory_allocated(device) / (1024**2)
+        #     reserved_mem_mb = torch.cuda.memory_reserved(device) / (1024**2)
+        #     print(f"Allocated memory: {allocated_mem_mb} MB")
+        #     print(f"Reserved memory: {reserved_mem_mb} MB")
+        #     free_mem_bytes, total_mem_bytes = torch.cuda.mem_get_info(device)
+            
+        #     free_mem_mb = free_mem_bytes / (1024**2)
+        #     total_mem_mb = total_mem_bytes / (1024**2)
+            
+        #     print(f"Free memory: {free_mem_mb} MB")
+        #     print(f"Total memory: {total_mem_mb} MB")
+        
+        # print(f"Calling C function: {self.func.__name__}")
+
+
+
+
+
         c_args = []
         for arg in args:
             # This is the key: get the current C argtype based on the length
@@ -355,9 +375,10 @@ class HEonGPULibrary:
 
         
         # HEonGPU parameters (using CKKS defaults where applicable)
-        keyswitch_method = 2 
-        sec_level = 128
-        
+        keyswitch_method = 2
+        # can set to default (128) or can let HEonGPU choose
+        # sec_level = 128
+        sec_level = 0
         context_handle = self.HEonGPU_CKKS_Context_Create(keyswitch_method, sec_level)
         if not context_handle:
             raise RuntimeError("Failed to create HEonGPU CKKS Context shell.")
@@ -373,7 +394,7 @@ class HEonGPULibrary:
         self.HEonGPU_CKKS_Context_SetPolyModulusDegree(context_handle, poly_degree)
 
         print(f"INFO: Setting CoeffModulus with LogQ: {logq} and LogP: {logp}")
-        result_modulus = self.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes(context_handle, logq, logp[0:1])
+        result_modulus = self.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes(context_handle, logq, logp)
         if result_modulus != 0:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
             raise RuntimeError(f"Failed to set HEonGPU coefficient modulus bit-sizes. Status: {result_modulus}")
@@ -507,8 +528,8 @@ class HEonGPULibrary:
         return ctxt_out
 
     def DeleteCiphertext(self, ct):
-        # self._DeleteCiphertext(ct)
-        pass
+        self._DeleteCiphertext(ct)
+    
     def GetModuliChain(self):
         required_size = self._GetModuliChain(
             self.context_handle,
@@ -1208,10 +1229,10 @@ class HEonGPULibrary:
         return self._Negate(self.arithmeticoperator_handle, ct, newct, None)
     def Rotate(self, ct, slots):
         self.HEonGPU_CKKS_SynchronizeDevice()
-        newpt = self.Decrypt(ct)
-        newval =  self.Decode(newpt)
-        self.DeletePlaintext(newpt)
-        print(f"[DEBUG] In Rotate, old value is: {newval[:10]}")
+        # newpt = self.Decrypt(ct)
+        # newval =  self.Decode(newpt)
+        # self.DeletePlaintext(newpt)
+        # print(f"[DEBUG] In Rotate, old value is: {newval[:10]}")
 
         rotation_amount = slots
         if not hasattr(self, 'consolidated_galois_key_handle'):
@@ -1219,6 +1240,8 @@ class HEonGPULibrary:
 
         if not hasattr(self, 'rotation_keys_cache'):
             self.rotation_keys_cache = []
+        if not hasattr(self, 'normalized_steps'):
+            self.normalized_steps = []   
         
         print(f"Trying to rotat by {rotation_amount}, supportd rotations are {self.normalized_steps}")
         if(rotation_amount not in self.normalized_steps and rotation_amount not in self.rotation_keys_cache):
@@ -1248,12 +1271,12 @@ class HEonGPULibrary:
         
         elif (rotation_amount in self.normalized_steps):  #key exists
             key_handle = self.consolidated_galois_key_handle
-            self.StoreGaloisKeyInDevice(key_handle, None)
+            # self.StoreGaloisKeyInDevice(key_handle, None)
 
             self.HEonGPU_CKKS_SynchronizeDevice()
             self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, key_handle, None)
             
-            self.StoreGaloisKeyInHost(key_handle, None)
+            # self.StoreGaloisKeyInHost(key_handle, None)
             
             self.HEonGPU_CKKS_SynchronizeDevice()
             # newpt = self.Decrypt(ct)
@@ -1263,24 +1286,24 @@ class HEonGPULibrary:
             return ct
         elif (rotation_amount in self.rotation_keys_cache):
             specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
-            self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
+            # self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
             self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, specific_galois_key_handle, None)
-            self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
+            # self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
             return ct
 
     def RotateNew(self, ct, slots):
         self.HEonGPU_CKKS_SynchronizeDevice()
-        # newpt = self.Decrypt(ct)
-        # newval =  self.Decode(newpt)
-        # self.DeletePlaintext(newpt)
-        # print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        self.DeletePlaintext(newpt)
+        print(f"[DEBUG] In RotateNew, old value is: {newval[:10]}")
 
         rotation_amount = slots
-        if not hasattr(self, 'consolidated_galois_key_handle'):
-            raise RuntimeError("Consolidated Galois key was not generated before calling RotateNew.")
 
         if not hasattr(self, 'rotation_keys_cache'):
             self.rotation_keys_cache = []
+        if not hasattr(self, 'normalized_steps'):
+            self.normalized_steps = []
         
         print(f"Trying to rotat by {rotation_amount}, supportd rotations are {self.normalized_steps}")
         if(rotation_amount not in self.normalized_steps and rotation_amount not in self.rotation_keys_cache):
@@ -1311,34 +1334,34 @@ class HEonGPULibrary:
         #Now, use key
         if (rotation_amount in self.normalized_steps):  #key exists
             key_handle = self.consolidated_galois_key_handle
-            self.StoreGaloisKeyInDevice(key_handle, None)
+            # self.StoreGaloisKeyInDevice(key_handle, None)
 
             newct_shell = self.NewCiphertext(self.context_handle, None)
             self.HEonGPU_CKKS_SynchronizeDevice()
             newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, key_handle, None)
             
-            self.StoreGaloisKeyInHost(key_handle, None)
+            # self.StoreGaloisKeyInHost(key_handle, None)
             
             if not newct_result:
                 raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
             self.HEonGPU_CKKS_SynchronizeDevice()
-            # newpt = self.Decrypt(newct_result)
-            # newval =  self.Decode(newpt)
-            # self.DeletePlaintext(newpt)
-            # print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
+            newpt = self.Decrypt(newct_result)
+            newval =  self.Decode(newpt)
+            self.DeletePlaintext(newpt)
+            print(f"[DEBUG] In RotateNew1, new value is: {newval[:10]}")
             return newct_result
         elif (rotation_amount in self.rotation_keys_cache):
             specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
             newct_shell = self.NewCiphertext(self.context_handle, None)
-            self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
+            # self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
             self.HEonGPU_CKKS_SynchronizeDevice()
             newct = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
-            self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
+            # self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
             self.HEonGPU_CKKS_SynchronizeDevice()
-            # newpt = self.Decrypt(newct)
-            # newval =  self.Decode(newpt)
-            # self.DeletePlaintext(newpt)
-            # print(f"[DEBUG] In RotateNew, new value is: {newval[:10]}")
+            newpt = self.Decrypt(newct)
+            newval =  self.Decode(newpt)
+            self.DeletePlaintext(newpt)
+            print(f"[DEBUG] In RotateNew2, new value is: {newval[:10]}")
             return newct
 
 
@@ -1403,6 +1426,7 @@ class HEonGPULibrary:
     def AddScalar(self, ct, scalar):
         num_slots = self.poly_degree // 2
         values = [scalar] * num_slots
+        ct_depth = self.GetCiphertextDepth(ct)
         pt = self.Encode(values, 0, self.scale)
         if ct_depth > 0:
             print(f"[DEBUG] Dropping plaintext modulus {ct_depth} times to match ciphertext.")
@@ -1692,21 +1716,23 @@ class HEonGPULibrary:
 
 
     def EvaluateLinearTransform(self, transform_id, ctxt_in_handle):
-        # newpt = self.Decrypt(ctxt_in_handle)
-        # newval =  self.Decode(newpt)
-        # print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
+        newpt = self.Decrypt(ctxt_in_handle)
+        newval =  self.Decode(newpt)
+        print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
         
         initial_scale = self.scale
-        self.Rescale(ctxt_in_handle)
+        # self.Rescale(ctxt_in_handle)
         initial_level = self.GetCiphertextLevel(ctxt_in_handle)
         num_slots = self.GetCiphertextSlots(ctxt_in_handle)
         zero_ptxt = self.Encode([0.0] * num_slots, level=initial_level, scale=initial_scale)
         accumulator_ctxt = self.Encrypt(zero_ptxt)
         self.DeletePlaintext(zero_ptxt) # This plaintext is no longer needed.
         for diag_idx, diag_coeffs in diagonals.items():
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE] Looping, diag_idx = {diag_idx}")
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE] ctxt_in_handle depth = {self.GetCiphertextDepth(ctxt_in_handle)}")
             self.HEonGPU_CKKS_SynchronizeDevice()
             rotated_ctxt = self.RotateNew(ctxt_in_handle, diag_idx)
             self.HEonGPU_CKKS_SynchronizeDevice()
@@ -1716,6 +1742,9 @@ class HEonGPULibrary:
                 raise RuntimeError("Failed to create rotated ciphertext or diagonal plaintext.")
             
             print(f"[EVALUATELINEARTRANSFORM MIDDLE rotated_ctxt scale - {self.GetCiphertextScale(rotated_ctxt)} diag_ptxt scale - {self.GetPlaintextScale(diag_ptxt)}")
+            newpt = self.Decrypt(rotated_ctxt)
+            newval =  self.Decode(newpt)
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE Multiplying diag_coeffs - {diag_coeffs[0:10]} by rotated_ctxt - {newval[0:10]}")
             term_ctxt = self.MulPlaintextNew(rotated_ctxt, diag_ptxt)
             self.HEonGPU_CKKS_SynchronizeDevice()
             self.Rescale(term_ctxt)
@@ -1725,17 +1754,17 @@ class HEonGPULibrary:
                 raise RuntimeError("Failed to multiply rotated ciphertext and diagonal plaintext.")
 
             self.HEonGPU_CKKS_SynchronizeDevice()
-            # midpt2 = self.Decrypt(accumulator_ctxt)
-            # midval2 =  self.Decode(midpt2)
-            # midpt3 = self.Decrypt(term_ctxt)
-            # midval3 =  self.Decode(midpt3)
-            # print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
-            # print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
+            midpt2 = self.Decrypt(accumulator_ctxt)
+            midval2 =  self.Decode(midpt2)
+            midpt3 = self.Decrypt(term_ctxt)
+            midval3 =  self.Decode(midpt3)
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
             new_accumulator_ctxt = self.AddCiphertextNew(accumulator_ctxt, term_ctxt)
-            # midpt = self.Decrypt(new_accumulator_ctxt)
-            # midval =  self.Decode(midpt)
+            midpt = self.Decrypt(new_accumulator_ctxt)
+            midval =  self.Decode(midpt)
             
-            # print(f"[EVALUATELINEARTRANSFORM MIDDLE new_accumulator_ctxt - {midval[:10]}")
+            print(f"[EVALUATELINEARTRANSFORM MIDDLE new_accumulator_ctxt - {midval[:10]}")
             self.HEonGPU_CKKS_SynchronizeDevice()
             if not new_accumulator_ctxt:
                 raise RuntimeError("Failed to add term to accumulator.")
@@ -1749,9 +1778,9 @@ class HEonGPULibrary:
             # Update the accumulator to point to the new sum.
             accumulator_ctxt = new_accumulator_ctxt
 
-        # newpt = self.Decrypt(accumulator_ctxt)
-        # newval =  self.Decode(newpt)
-        # print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
+        newpt = self.Decrypt(accumulator_ctxt)
+        newval =  self.Decode(newpt)
+        print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         return accumulator_ctxt
         
@@ -1773,14 +1802,13 @@ class HEonGPULibrary:
     def GetLinearTransformRotationKeys(self, transform_id):
         #inspects a compiled transform and returns the list of required rotation indices
         self.HEonGPU_CKKS_SynchronizeDevice()
-        self.TestBootstrap()
         plan = self.linear_transforms[transform_id]
         #the diagonal indices are the rotation indices needed
         #rotation by 0 is a conjugation, requires specific galois key
         #Lattigo convention represent this with the Galois element for N+1
         #but we use a simple mapping: rotation_step=0 -> galois_elt=0 (placeholder)
         # required_rotations = list(plan['diagonals'].keys())
-        required_rotations = []
+        required_rotations = [0]
         #also generate all powers of 2
         i = 1
         while i <= self.poly_degree // 2:
@@ -1813,7 +1841,7 @@ class HEonGPULibrary:
         if status != 0:
             self.DeleteGaloisKey(galois_key_handle)
             raise RuntimeError(f"HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey failed for step {rotation_step} with status {status}")
-        self.StoreGaloisKeyInHost(galois_key_handle, None) # Using null stream
+        # self.StoreGaloisKeyInHost(galois_key_handle, None) # Using null stream
         self.rotation_keys_cache[rotation_step] = galois_key_handle
 
     def GenerateConsolidatedRotationKeys(self, rotation_steps: list):
@@ -1839,7 +1867,7 @@ class HEonGPULibrary:
             self.DeleteGaloisKey(galois_key_handle)
             raise RuntimeError(f"HEonGPU_CKKS_KeyGenerator_GenerateGaloisKey failed for consolidated key with status {status}")
 
-        self.StoreGaloisKeyInHost(galois_key_handle, None)
+        # self.StoreGaloisKeyInHost(galois_key_handle, None)
         self.consolidated_galois_key_handle = galois_key_handle
 
 
@@ -1924,68 +1952,67 @@ class HEonGPULibrary:
     BOOTSTRAP_PRESET_CONFIG = {
         # Target Depth: { 'taylor_number', 'CtoS_piece', 'StoC_piece', 'less_key_mode' }
         1: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         2: { 
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         3: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         4: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         5: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         6: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         7: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         8: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         9: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         },
         10: {
-            'taylor_number': 6, 
+            'taylor_number': 11, 
             'CtoS_piece': 3,
             'StoC_piece': 3,
             'less_key_mode': True
         }
     }
     def NewBootstrapper(self, logPs, num_slots):
-        return
         #we dont care about the exaxt logPs, or num_slots, just the length. HEonGPU will create the logPs from the parameters given:
         print(logPs)
         length = len(logPs)
@@ -2010,17 +2037,52 @@ class HEonGPULibrary:
         print(f"        - StoC_piece: {boot_config.StoC_piece}")
         print(f"        - taylor_number: {boot_config.taylor_number}")
         print(f"        - less_key_mode: {boot_config.less_key_mode}\n")
-        self.bootstrap_handle = self._GenerateBootstrappingParams(
+        status = self._GenerateBootstrappingParams(
             self.arithmeticoperator_handle,
             ctypes.c_double(self.scale),
             ctypes.byref(boot_config)
+        )
+        print("[DEBUG]   - Output of _GenerateBootstrappingParams:")
+        print(f"[DEBUG]     - Status: {status}")
+        self.HEonGPU_CKKS_SynchronizeDevice()
+        indices_ptr = ctypes.POINTER(ctypes.c_int)()
+        count = ctypes.c_size_t()
+        
+        status = self._GetBootstrappingKeyIndices(
+            self.arithmeticoperator_handle,
+            ctypes.byref(indices_ptr),
+            ctypes.byref(count)
+        )
+        print("[DEBUG]   - Output of _GetBootstrappingKeyIndices:")
+        print(f"[DEBUG]     - Status: {status}")
+        print(f"[DEBUG]     - Count of indices: {count.value}")
+
+            
+        indices_list = [indices_ptr[i] for i in range(count.value)]
+        print(f"[DEBUG]     -  indices: {indices_list}")
+
+        self.bootstrap_galois_key_handle = self.CreateGaloisKeyWithShifts(
+            self.context_handle,
+            indices_list
+        )
+        print("[DEBUG]   - Output of CreateGaloisKeyWithShifts:")
+        print(f"[DEBUG]     - Galois Key Handle: {self.bootstrap_galois_key_handle}")
+        #Need to generate the keys here *****
+        status = self.GenerateGaloisKey(
+            self.keygenerator_handle,
+            self.bootstrap_galois_key_handle,
+            self.secretkey_handle,
+            None
         )
 
     def Bootstrap(self, ct, num_slots):
         
         print("[DEBUG] Bootsrapping!")
         print("[DEBUG] Entering Python binding for Bootstrap.")
-        self.NewBootstrapper([60, 60], -1)  #delete later, but good for testing
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        print(f"[DEBUG], before Bootstrap - {newval[:10]}")
+        # self.NewBootstrapper([60, 60], -1)  #delete later, but good for testing
         #Try to replicate the bootstrapping example from HEonGPU, key is to look at bindings and params/setup to ensure everything works (liekly doest)
         required_level = 1
         total_levels = self.q_size
@@ -2046,43 +2108,14 @@ class HEonGPULibrary:
         print(f"[DEBUG]   - Final Input ciphertext remaining levels: {ct_level}")
         print(f"[DEBUG]   - Final Input ciphertext scale from C++: {ct_scale}")
         
-        indices_ptr = ctypes.POINTER(ctypes.c_int)()
-        count = ctypes.c_size_t()
         
-        status = self._GetBootstrappingKeyIndices(
-            self.arithmeticoperator_handle,
-            ctypes.byref(indices_ptr),
-            ctypes.byref(count)
-        )
-        print("[DEBUG]   - Output of _GetBootstrappingKeyIndices:")
-        print(f"[DEBUG]     - Status: {status}")
-        print(f"[DEBUG]     - Count of indices: {count.value}")
-
-            
-        indices_list = [indices_ptr[i] for i in range(count.value)]
-        print(f"[DEBUG]     -  indices: {indices_list}")
-
-        galois_key_handle = self.CreateGaloisKeyWithShifts(
-            self.context_handle,
-            indices_list
-        )
-        print("[DEBUG]   - Output of CreateGaloisKeyWithShifts:")
-        print(f"[DEBUG]     - Galois Key Handle: {galois_key_handle}")
-        #Need to generate the keys here *****
-        status = self.GenerateGaloisKey(
-            self.keygenerator_handle,
-            galois_key_handle,
-            self.secretkey_handle,
-            None
-        )
-        print("[DEBUG]   - Finished generating Galois key data.")
 
 
         print("[DEBUG] Before _RegularBootstrapping.")
         bootstrapped_ct = self._RegularBootstrapping(
             self.arithmeticoperator_handle,
             ct,
-            galois_key_handle,
+            self.bootstrap_galois_key_handle,
             self.relinkey_handle,
             None 
         )
@@ -2090,6 +2123,9 @@ class HEonGPULibrary:
         if not bootstrapped_ct:
             raise RuntimeError("The C++ RegularBootstrapping operation failed and returned a null pointer.")
 
+        newpt = self.Decrypt(ct)
+        newval =  self.Decode(newpt)
+        print(f"[DEBUG], before Bootstrap - {newval[:10]}")
         print("[DEBUG] Finished Bootstrapping!")
         return bootstrapped_ct
 
