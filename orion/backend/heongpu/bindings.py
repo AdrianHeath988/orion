@@ -528,7 +528,8 @@ class HEonGPULibrary:
         return ctxt_out
 
     def DeleteCiphertext(self, ct):
-        self._DeleteCiphertext(ct)
+        if(self.context_handle != None):  #only try to delete if memory pool exists
+            self._DeleteCiphertext(ct)
     
     def GetModuliChain(self):
         required_size = self._GetModuliChain(
@@ -923,9 +924,11 @@ class HEonGPULibrary:
 
 
 
-
     def DeleteScheme(self):
+        print("[DEBUG] In DeleteScheme", flush=True)
+        self.HEonGPU_CKKS_SynchronizeDevice()
         self.shutdown()
+        self.context_handle = None
 
     def DeleteBootstrappers(self):
         pass
@@ -1210,7 +1213,6 @@ class HEonGPULibrary:
         return ct
     def ModDropPlaintext(self, ptxt):
         # This calls the in-place mod drop for plaintexts
-        print("In ModDropPlaintext")
         self._ModDropPlaintext(self.arithmeticoperator_handle, ptxt, None)
     def CreateCiphertext(self):
         return self.NewCiphertext(self.context_handle, None)
@@ -1567,15 +1569,11 @@ class HEonGPULibrary:
         try:
             if depth1 < depth2:
                 print(f"[DEBUG] AddCiphertextNew: Mismatch. Cloning and dropping ct1 from depth {depth1} to {depth2}.")
-                temp_ct = self.CloneCiphertext(ct1)
-                ct1_to_add = temp_ct # The addition will use the clone.
                 for _ in range(depth2 - depth1):
                     self.ModDropCiphertextInplace(ct1_to_add)
 
             elif depth2 < depth1:
                 print(f"[DEBUG] AddCiphertextNew: Mismatch. Cloning and dropping ct2 from depth {depth2} to {depth1}.")
-                temp_ct = self.CloneCiphertext(ct2)
-                ct2_to_add = temp_ct # The addition will use the clone.
                 for _ in range(depth1 - depth2):
                     self.ModDropCiphertextInplace(ct2_to_add)
 
