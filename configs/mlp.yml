@@ -6,12 +6,12 @@ ckks_params:
   LogP: [29, 29]
   LogScale: 26
   H: 8192
-  RingType: ConjugateInvariant
+  RingType: Standard
 
 orion:
   margin: 2 # >= 1
   embedding_method: hybrid # [hybrid, square]
-  backend: lattigo # [lattigo, openfhe, heaan]
+  backend: heongpu # [lattigo, openfhe, heaan]
 
   fuse_modules: true
   debug: false

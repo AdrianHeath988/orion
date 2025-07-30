@@ -925,7 +925,7 @@ class HEonGPULibrary:
 
 
     def DeleteScheme(self):
-        pass
+        self.shutdown()
 
     def DeleteBootstrappers(self):
         pass
@@ -1328,6 +1328,7 @@ class HEonGPULibrary:
             powers.pop(0)
             for rot in powers:
                 self.Rotate(newct, rot)
+            self.HEonGPU_CKKS_SynchronizeDevice()
             return newct
 
 
@@ -1394,6 +1395,7 @@ class HEonGPULibrary:
         # newval =  self.Decode(newpt)
         # self.DeletePlaintext(newpt)
         # print(f"[DEBUG] In Rescale, new value is: {newval[:10]}")
+        self.HEonGPU_CKKS_SynchronizeDevice()
         return ct
     def RescaleNew(self, ct):
         # newpt = self.Decrypt(ct)
@@ -1498,10 +1500,12 @@ class HEonGPULibrary:
         # oldpt = self.Decrypt(ct)
         # oldval =  self.Decode(oldpt)
         # print(f"[DEBUG] In AddPlaintext, old value is: {oldval[:10]}")
-        
+        self.HEonGPU_CKKS_SynchronizeDevice()
 
         print("--- [DEBUG] Calling backend _AddPlaintext ---")
         ret = self._AddPlaintext(self.arithmeticoperator_handle, ct, pt, None)
+        
+        self.HEonGPU_CKKS_SynchronizeDevice()
         # newpt = self.Decrypt(ct)
         # newval =  self.Decode(newpt)
         # print(f"[DEBUG] In AddPlaintext, new value is: {newval[:10]}")
@@ -1584,6 +1588,7 @@ class HEonGPULibrary:
             # midval2 =  self.Decode(midpt2)
             # print(f"[DEBUG] In AddCiphertextNew, adding {midval[:10]} with {midval2[:10]}")
             # print(f"[DEBUG] In AddCiphertextNew, ct1 has scale {self.GetCiphertextScale(ct1)}, ct2 has scale {self.GetCiphertextScale(ct2)}")
+            self.HEonGPU_CKKS_SynchronizeDevice()
             newct_result = self._AddCiphertextNew(
                 self.arithmeticoperator_handle,
                 ct1_to_add,
@@ -1594,6 +1599,7 @@ class HEonGPULibrary:
             # endpt = self.Decrypt(newct_result)
             # endval =  self.Decode(endpt)
             # print(f"[DEBUG] In AddCiphertextNew, end is {endval[:10]}")
+            self.HEonGPU_CKKS_SynchronizeDevice()
             if not newct_result:
                 raise RuntimeError("HEonGPU_CKKS_ArithmeticOperator_Add failed and returned a null pointer.")
 
@@ -1745,6 +1751,7 @@ class HEonGPULibrary:
             # newpt = self.Decrypt(rotated_ctxt)
             # newval =  self.Decode(newpt)
             # print(f"[EVALUATELINEARTRANSFORM MIDDLE Multiplying diag_coeffs - {diag_coeffs[0:10]} by rotated_ctxt - {newval[0:10]}")
+            self.HEonGPU_CKKS_SynchronizeDevice()
             self.MulPlaintext(rotated_ctxt, diag_ptxt)
             term_ctxt = rotated_ctxt
             self.HEonGPU_CKKS_SynchronizeDevice()
@@ -1761,6 +1768,8 @@ class HEonGPULibrary:
             # midval3 =  self.Decode(midpt3)
             # print(f"[EVALUATELINEARTRANSFORM MIDDLE accumulator_ctxt - {midval2[:10]}")
             # print(f"[EVALUATELINEARTRANSFORM MIDDLE term_ctxt - {midval3[:10]}")
+            while(self.GetCiphertextDepth(accumulator_ctxt)<self.GetCiphertextDepth(term_ctxt)):
+                self.ModDropCiphertextInplace(accumulator_ctxt)
             self.AddCiphertext(accumulator_ctxt, term_ctxt)
             # midpt = self.Decrypt(new_accumulator_ctxt)
             # midval =  self.Decode(midpt)
