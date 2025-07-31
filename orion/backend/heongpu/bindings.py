@@ -1220,7 +1220,7 @@ class HEonGPULibrary:
         return self.NewPlaintext(self.context_handle, None)
     def DeletePlaintext(self, pt):
         pass
-        # return self.DeletePlaintext(pt)
+        # return self._DeletePlaintext(pt)
     def NewEvaluator(self):
         print(self.context_handle)
         print(self.encoder_handle)
