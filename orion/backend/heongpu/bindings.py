@@ -1384,6 +1384,9 @@ class HEonGPULibrary:
         # print(f"[DEBUG] In Rescale, old value is: {newval[:10]}")
         self.HEonGPU_CKKS_SynchronizeDevice()
         ct = ct.values if isinstance(ct, CipherTensor) else ct
+        depth = self.GetCiphertextDepth(ct)
+        if(depth>=self.q_size - 2):
+            ct = self.Bootstrap(ct, self.poly_degree // 2)
 
         # print(f"[DEBUG] In bindings.py Rescale, address of ct: {id(ct)}")
         # print(f"[DEBUG] In bindings.py Rescale, object is: {object.__repr__(ct)}")
@@ -1564,6 +1567,14 @@ class HEonGPULibrary:
     def AddCiphertextNew(self, ct1, ct2):
         depth1 = self.GetCiphertextDepth(ct1)
         depth2 = self.GetCiphertextDepth(ct2)
+        if(depth1>=self.q_size - 1 or depth2 >= self.q_size - 1):
+            print("[WARNING] AddCiphertextNew Doing Independant Bootstrap")
+            ct1 = self.Bootstrap(ct1, self.poly_degree//2)
+            ct2 = self.Bootstrap(ct2, self.poly_degree//2)
+            ct1 = self.Rescale(ct1)
+            ct2 = self.Rescale(ct2)
+        depth1 = self.GetCiphertextDepth(ct1)
+        depth2 = self.GetCiphertextDepth(ct2)
         ct1_to_add = ct1
         ct2_to_add = ct2
         temp_ct = None
@@ -1617,26 +1628,34 @@ class HEonGPULibrary:
     #combines multiplication and relin
     def MulRelinCiphertext(self, ct1, ct2):
 
-        # TODO: UNCOMMENT IF YOU WANT RESNET 50 (IDK WHY)
 
         # depth1 = self.GetCiphertextDepth(ct1)
         # depth2 = self.GetCiphertextDepth(ct2)
-        # if(depth1>=self.q_size or depth2 >= self.q_size):
+        # if(depth1>=self.q_size - 2 or depth2 >= self.q_size - 2):
         #     print("[WARNING] MulRelinCiphertext Doing Independant Bootstrap")
         #     ct1 = self.Bootstrap(ct1, self.poly_degree//2)
         #     ct2 = self.Bootstrap(ct2, self.poly_degree//2)
-        # depth1 = self.GetCiphertextDepth(ct1)
-        # depth2 = self.GetCiphertextDepth(ct2)
-        # print(f"[DEBUG] Multiplying ct1 with depth {depth1} by ct2 with depth {depth2}")
-        # if depth1 < depth2:
-        #     for _ in range(depth2 - depth1):
-        #         self.ModDropCiphertextInplace(ct1)
-        # elif depth2 < depth1:
-        #     for _ in range(depth1 - depth2):
-        #         self.ModDropCiphertextInplace(ct2)
+        #     ct1 = self.Rescale(ct1)
+        #     ct2 = self.Rescale(ct2)
+
+        
+        depth1 = self.GetCiphertextDepth(ct1)
+        depth2 = self.GetCiphertextDepth(ct2)
+        print(f"[DEBUG] Multiplying ct1 with depth {depth1} by ct2 with depth {depth2}")
+        if depth1 < depth2:
+            for _ in range(depth2 - depth1):
+                self.ModDropCiphertextInplace(ct1)
+        elif depth2 < depth1:
+            for _ in range(depth1 - depth2):
+                self.ModDropCiphertextInplace(ct2)
             
         self._MultiplyCiphertext(self.arithmeticoperator_handle, ct1, ct2, None)
         self._RelinearizeCiphertext(self.arithmeticoperator_handle, ct1, self.relinkey_handle, None)
+        if depth1 < depth2 or depth2 < depth1:
+            if(depth1>=self.q_size - 2 or depth2 >= self.q_size - 2):
+                ct1 = self.Bootstrap(ct1, self.poly_degree//2)
+                ct2 = self.Bootstrap(ct2, self.poly_degree//2)
+
         return ct1
     #not currently implemented in HEonGPU wrapper
     def MulRelinCiphertextNew(self, ctxt0, ctxt1):
@@ -1663,6 +1682,7 @@ class HEonGPULibrary:
     def GenerateChebyshev(self, coeffsPtr, coeffsLen):
         #Given an array of coefficients and the length of the array, save it to the array setup in NewPolynomialEvaluator, and return the index
         #for now, the internal representation will be identiacal
+        print("[DEBUG] --------------------------- GenerateChebyshev ---------------------------")
         return self.GenerateMonomial(coeffsPtr, coeffsLen)
 
     def EvaluatePolynomial(self, ctxt_in_handle, poly_id, out_scale=None):
@@ -1673,13 +1693,30 @@ class HEonGPULibrary:
         # print("[DEBUG] In EvaluatePolynomial")
         coeffs = self.polys[poly_id]
         degree = len(coeffs) - 1
-        print(f"[DEBUG] In EvaluatePolynomial, degree = {degree}")
+
+        depth = self.GetCiphertextDepth(ctxt_in_handle)
+        print(f"[DEBUG] In EvaluatePolynomial1 , depth = {depth}")
+        if(depth>=self.q_size - 1):
+            ctxt_in_handle = self.Bootstrap(ctxt_in_handle, self.poly_degree // 2)
+        self.Rescale(ctxt_in_handle)
+        depth = self.GetCiphertextDepth(ctxt_in_handle)
+        print(f"[DEBUG] In EvaluatePolynomial, degree = {degree}, depth = {depth}")
+
         current_scale = self.GetCiphertextScale(ctxt_in_handle)
         current_level = self.GetCiphertextLevel(ctxt_in_handle)
         highest_coeff_ptxt = self.Encode([coeffs[-1]], level=current_level, scale=current_scale)
         result_ctxt_handle = self.Encrypt(highest_coeff_ptxt)
         self.DeletePlaintext(highest_coeff_ptxt)
         for i in range(degree - 1, -1, -1):
+
+            depth = self.GetCiphertextDepth(result_ctxt_handle)
+            if(depth>=self.q_size - 1):
+                result_ctxt_handle = self.Bootstrap(result_ctxt_handle, self.poly_degree // 2)
+
+            depth2 = self.GetCiphertextDepth(ctxt_in_handle)
+            if(depth2>=self.q_size - 1):
+                ctxt_in_handle = self.Bootstrap(ctxt_in_handle, self.poly_degree // 2)
+            
             self.MulRelinCiphertext(result_ctxt_handle, ctxt_in_handle)
             self.Rescale(result_ctxt_handle)
             next_coeff = coeffs[i]
@@ -1687,6 +1724,11 @@ class HEonGPULibrary:
             coeff_ptxt = self.Encode([next_coeff], level=self.GetCiphertextLevel(result_ctxt_handle), scale=rescaled_scale)
             self.AddPlaintext(result_ctxt_handle, coeff_ptxt)
             self.DeletePlaintext(coeff_ptxt)
+
+        depth = self.GetCiphertextDepth(result_ctxt_handle)
+        
+        result_ctxt_handle = self.Bootstrap(result_ctxt_handle, self.poly_degree // 2)
+        print(f"[DEBUG] Finished EvaluatePolynomial")
         return result_ctxt_handle
 
     def GenerateMinimaxSignCoeffs(self, degrees, prec=64, logalpha=12, logerr=12, debug=1):
@@ -1746,15 +1788,18 @@ class HEonGPULibrary:
         # newpt = self.Decrypt(ctxt_in_handle)
         # newval =  self.Decode(newpt)
         # print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
+        print(f"[DEBUG] In EvaluateLinearTransform")
         self.HEonGPU_CKKS_SynchronizeDevice()
+
         plan = self.linear_transforms[transform_id]
         diagonals = plan['diagonals']
         
         initial_scale = self.scale
-        self.Rescale(ctxt_in_handle)
         depth1 = self.GetCiphertextDepth(ctxt_in_handle)
         if(depth1>=self.q_size - 1):
             ctxt_in_handle = self.Bootstrap(ctxt_in_handle, self.poly_degree // 2)
+        
+        self.Rescale(ctxt_in_handle)
         initial_level = self.GetCiphertextLevel(ctxt_in_handle)
         num_slots = self.GetCiphertextSlots(ctxt_in_handle)
         zero_ptxt = self.Encode([0.0] * num_slots, level=initial_level, scale=initial_scale)
@@ -1813,6 +1858,7 @@ class HEonGPULibrary:
         # newpt = self.Decrypt(accumulator_ctxt)
         # newval =  self.Decode(newpt)
         # print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
+        print(f"[DEBUG] Finished EvaluateLinearTransform")
         self.HEonGPU_CKKS_SynchronizeDevice()
         return accumulator_ctxt
         
@@ -2049,7 +2095,7 @@ class HEonGPULibrary:
         # print(logPs)
         length = len(logPs)
         config_params = self.BOOTSTRAP_PRESET_CONFIG[length]
-        # print("[DEBUG] In NewBootstrapper:")
+        print("[DEBUG] In NewBootstrapper:")
         # print(f"    - logPs length: {length}")
         # print(f"    - Selected config_params: {config_params}")
         # print(f"    - Scale being passed: {self.scale}")
@@ -2069,6 +2115,7 @@ class HEonGPULibrary:
         # print(f"        - StoC_piece: {boot_config.StoC_piece}")
         # print(f"        - taylor_number: {boot_config.taylor_number}")
         # print(f"        - less_key_mode: {boot_config.less_key_mode}\n")
+        self.HEonGPU_CKKS_SynchronizeDevice()
         status = self._GenerateBootstrappingParams(
             self.arithmeticoperator_handle,
             ctypes.c_double(self.scale),
@@ -2109,7 +2156,7 @@ class HEonGPULibrary:
 
     def Bootstrap(self, ct, num_slots):
         
-        # print("[DEBUG] Bootsrapping!")
+        print("[DEBUG] Bootsrapping!")
         # print("[DEBUG] Entering Python binding for Bootstrap.")
         # newpt = self.Decrypt(ct)
         # newval =  self.Decode(newpt)
