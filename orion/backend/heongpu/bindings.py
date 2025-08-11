@@ -385,16 +385,16 @@ class HEonGPULibrary:
 
         poly_degree = 1 << orion_params.get_logn()
         self.poly_degree = poly_degree 
-        logq = orion_params.get_logq()
-        logp = orion_params.get_logp()
+        self.logq = orion_params.get_logq()
+        self.logp = orion_params.get_logp()
         print(orion_params.get_logscale())
         self.scale = 2.0 ** orion_params.get_logscale()
-        self.q_size = len(logq)
+        self.q_size = len(self.logq)
         print(f"INFO: Setting PolyModulusDegree to {poly_degree}")
         self.HEonGPU_CKKS_Context_SetPolyModulusDegree(context_handle, poly_degree)
 
-        print(f"INFO: Setting CoeffModulus with LogQ: {logq} and LogP: {logp}")
-        result_modulus = self.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes(context_handle, logq, logp)
+        print(f"INFO: Setting CoeffModulus with LogQ: {self.logq} and LogP: {self.logp}")
+        result_modulus = self.HEonGPU_CKKS_Context_SetCoeffModulusBitSizes(context_handle, self.logq, self.logp)
         if result_modulus != 0:
             self.HEonGPU_CKKS_Context_Delete(context_handle)
             raise RuntimeError(f"Failed to set HEonGPU coefficient modulus bit-sizes. Status: {result_modulus}")
@@ -1224,6 +1224,7 @@ class HEonGPULibrary:
         # print(self.context_handle)
         # print(self.encoder_handle)
         self.arithmeticoperator_handle = self._NewEvaluator(self.context_handle, self.encoder_handle)
+        self.NewBootstrapper(self.logp, 0)
     def Negate(self, ct):
         #Not in place negation: must create empty ct for output first
         newct = self.NewCiphertext(self.context_handle, None)
@@ -1274,12 +1275,12 @@ class HEonGPULibrary:
             key_handle = self.consolidated_galois_key_handle
             # self.StoreGaloisKeyInDevice(key_handle, None)
 
-            self.HEonGPU_CKKS_SynchronizeDevice()
+            # self.HEonGPU_CKKS_SynchronizeDevice()
             self._Rotate(self.arithmeticoperator_handle, ct, rotation_amount, key_handle, None)
             
             # self.StoreGaloisKeyInHost(key_handle, None)
             
-            self.HEonGPU_CKKS_SynchronizeDevice()
+            # self.HEonGPU_CKKS_SynchronizeDevice()
             # newpt = self.Decrypt(ct)
             # newval =  self.Decode(newpt)
             # self.DeletePlaintext(newpt)
@@ -1329,7 +1330,7 @@ class HEonGPULibrary:
             powers.pop(0)
             for rot in powers:
                 self.Rotate(newct, rot)
-            self.HEonGPU_CKKS_SynchronizeDevice()
+            # self.HEonGPU_CKKS_SynchronizeDevice()
             return newct
 
 
@@ -1339,14 +1340,14 @@ class HEonGPULibrary:
             # self.StoreGaloisKeyInDevice(key_handle, None)
 
             newct_shell = self.NewCiphertext(self.context_handle, None)
-            self.HEonGPU_CKKS_SynchronizeDevice()
+            # self.HEonGPU_CKKS_SynchronizeDevice()
             newct_result = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, key_handle, None)
             
             # self.StoreGaloisKeyInHost(key_handle, None)
             
             if not newct_result:
                 raise RuntimeError(f"HEonGPU_CKKS_ArithmeticOperator_Rotate failed for rotation {rotation_amount} and returned a null pointer.")
-            self.HEonGPU_CKKS_SynchronizeDevice()
+            # self.HEonGPU_CKKS_SynchronizeDevice()
             # newpt = self.Decrypt(newct_result)
             # newval =  self.Decode(newpt)
             # self.DeletePlaintext(newpt)
@@ -1356,10 +1357,10 @@ class HEonGPULibrary:
             specific_galois_key_handle = self.rotation_keys_cache[rotation_amount]
             newct_shell = self.NewCiphertext(self.context_handle, None)
             # self.StoreGaloisKeyInDevice(specific_galois_key_handle, None)
-            self.HEonGPU_CKKS_SynchronizeDevice()
+            # self.HEonGPU_CKKS_SynchronizeDevice()
             newct = self._RotateNew(self.arithmeticoperator_handle, ct, newct_shell, rotation_amount, specific_galois_key_handle, None)
             # self.StoreGaloisKeyInHost(specific_galois_key_handle, None)
-            self.HEonGPU_CKKS_SynchronizeDevice()
+            # self.HEonGPU_CKKS_SynchronizeDevice()
             # newpt = self.Decrypt(newct)
             # newval =  self.Decode(newpt)
             # self.DeletePlaintext(newpt)
@@ -1641,7 +1642,7 @@ class HEonGPULibrary:
         
         depth1 = self.GetCiphertextDepth(ct1)
         depth2 = self.GetCiphertextDepth(ct2)
-        print(f"[DEBUG] Multiplying ct1 with depth {depth1} by ct2 with depth {depth2}")
+        # print(f"[DEBUG] Multiplying ct1 with depth {depth1} by ct2 with depth {depth2}")
         if depth1 < depth2:
             for _ in range(depth2 - depth1):
                 self.ModDropCiphertextInplace(ct1)
@@ -1695,12 +1696,12 @@ class HEonGPULibrary:
         degree = len(coeffs) - 1
 
         depth = self.GetCiphertextDepth(ctxt_in_handle)
-        print(f"[DEBUG] In EvaluatePolynomial1 , depth = {depth}")
+        # print(f"[DEBUG] In EvaluatePolynomial1 , depth = {depth}")
         if(depth>=self.q_size - 1):
             ctxt_in_handle = self.Bootstrap(ctxt_in_handle, self.poly_degree // 2)
         self.Rescale(ctxt_in_handle)
         depth = self.GetCiphertextDepth(ctxt_in_handle)
-        print(f"[DEBUG] In EvaluatePolynomial, degree = {degree}, depth = {depth}")
+        # print(f"[DEBUG] In EvaluatePolynomial, degree = {degree}, depth = {depth}")
 
         current_scale = self.GetCiphertextScale(ctxt_in_handle)
         current_level = self.GetCiphertextLevel(ctxt_in_handle)
@@ -1728,7 +1729,7 @@ class HEonGPULibrary:
         depth = self.GetCiphertextDepth(result_ctxt_handle)
         
         result_ctxt_handle = self.Bootstrap(result_ctxt_handle, self.poly_degree // 2)
-        print(f"[DEBUG] Finished EvaluatePolynomial")
+        # print(f"[DEBUG] Finished EvaluatePolynomial")
         return result_ctxt_handle
 
     def GenerateMinimaxSignCoeffs(self, degrees, prec=64, logalpha=12, logerr=12, debug=1):
@@ -1788,7 +1789,7 @@ class HEonGPULibrary:
         # newpt = self.Decrypt(ctxt_in_handle)
         # newval =  self.Decode(newpt)
         # print(f"[EVALUATELINEARTRANSFORM BEFORE] - {newval[0:10]}")
-        print(f"[DEBUG] In EvaluateLinearTransform")
+        # print(f"[DEBUG] In EvaluateLinearTransform")
         self.HEonGPU_CKKS_SynchronizeDevice()
 
         plan = self.linear_transforms[transform_id]
@@ -1858,7 +1859,7 @@ class HEonGPULibrary:
         # newpt = self.Decrypt(accumulator_ctxt)
         # newval =  self.Decode(newpt)
         # print(f"[EVALUATELINEARTRANSFORM AFTER] - {newval[0:10]}")
-        print(f"[DEBUG] Finished EvaluateLinearTransform")
+        # print(f"[DEBUG] Finished EvaluateLinearTransform")
         self.HEonGPU_CKKS_SynchronizeDevice()
         return accumulator_ctxt
         
@@ -2095,7 +2096,7 @@ class HEonGPULibrary:
         # print(logPs)
         length = len(logPs)
         config_params = self.BOOTSTRAP_PRESET_CONFIG[length]
-        print("[DEBUG] In NewBootstrapper:")
+        # print("[DEBUG] In NewBootstrapper:")
         # print(f"    - logPs length: {length}")
         # print(f"    - Selected config_params: {config_params}")
         # print(f"    - Scale being passed: {self.scale}")
@@ -2157,10 +2158,12 @@ class HEonGPULibrary:
     def Bootstrap(self, ct, num_slots):
         
         print("[DEBUG] Bootsrapping!")
+        self.HEonGPU_CKKS_SynchronizeDevice()
         # print("[DEBUG] Entering Python binding for Bootstrap.")
         # newpt = self.Decrypt(ct)
         # newval =  self.Decode(newpt)
         # print(f"[DEBUG], before Bootstrap - {newval[:10]}")
+        # self.DeletePlaintext(newpt)
         # self.NewBootstrapper([60, 60], -1)  #delete later, but good for testing
         #Try to replicate the bootstrapping example from HEonGPU, key is to look at bindings and params/setup to ensure everything works (liekly doest)
         required_level = 1
@@ -2183,9 +2186,9 @@ class HEonGPULibrary:
         ct_level = total_levels - ct_depth
         ct_scale = self.GetCiphertextScale(ct)
 
-        # print(f"[DEBUG]   - Final Input ciphertext depth from C++: {ct_depth}")
-        # print(f"[DEBUG]   - Final Input ciphertext remaining levels: {ct_level}")
-        # print(f"[DEBUG]   - Final Input ciphertext scale from C++: {ct_scale}")
+        print(f"[DEBUG]   - Final Input ciphertext depth from C++: {ct_depth}")
+        print(f"[DEBUG]   - Final Input ciphertext remaining levels: {ct_level}")
+        print(f"[DEBUG]   - Final Input ciphertext scale from C++: {ct_scale}")
         
         
 
