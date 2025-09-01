@@ -4,3 +4,6 @@
 [submodule "orion/backend/heongpu/adrianHEonGPU"]
 	path = orion/backend/heongpu/adrianHEonGPU
 	url = git@github.com:AdrianHeath988/adrianHEonGPU.git
+[submodule "orion/backend/openfhe/openfhe-development"]
+	path = orion/backend/openfhe/openfhe-development
+	url = git@github.com:openfheorg/openfhe-development.git

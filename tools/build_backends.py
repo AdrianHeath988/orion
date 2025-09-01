@@ -113,56 +113,52 @@ def build_heongpu(root_dir, env):
             print(f"HEonGPU CMake build stderr:\n{e.stderr}")
         sys.exit(1)
 
-    # 3. CMake Install (IMPORTANT CONSIDERATIONS)
-    # Using 'sudo' here is highly problematic for automated builds:
-    #   - It will require password input, hanging the build.
-    #   - It installs system-wide, which might not be desired for a Poetry-managed project.
-    #   - It poses security risks.
-    #
-    # RECOMMENDATION:
-    #   a) If your Python code can find HEonGPU libraries directly in the 'heongpu_build_dir'
-    #      (e.g., in heongpu_build_dir/lib), this install step might be unnecessary.
-    #   b) If installation is needed, prefer installing to a local directory within your project.
-    #      You can do this by adding -D CMAKE_INSTALL_PREFIX=<local_path> to the cmake_configure_cmd
-    #      and then running the install command without sudo.
-    #      Example for local install prefix in configure step:
-    #          -D CMAKE_INSTALL_PREFIX=../install_heongpu_locally 
-    #      Then the install command would be:
-    #          cmake_install_cmd = ["cmake", "--install", str(heongpu_build_dir)] 
-    #          (no sudo, installs to the prefix)
-    #
-    # For now, this step is included as per your request but is VERY LIKELY TO CAUSE ISSUES.
-    # You will almost certainly need to modify or remove this.
+def build_openfhe(root_dir, env):
+    """
+    Builds the OpenFHE C++ library using CMake and Make.
+    """
+    print("\n=== Building OpenFHE C++ library ===")
+    
+    # 1. Set up paths for OpenFHE
+    # Path based on your project structure
+    openfhe_source_dir = root_dir / "orion" / "backend" / "openfhe" / "openfhe-development"
+    openfhe_build_dir = openfhe_source_dir / "build"
+    openfhe_install_dir = openfhe_source_dir / "install" # Local install directory
 
-    # Prepare the install command (currently includes sudo as per your original command)
-    # cmake_install_cmd = [
-    #     "sudo", "cmake", "--install", str(heongpu_build_dir)
-    # ]
+    # Check if the source directory exists
+    if not openfhe_source_dir.is_dir():
+        print(f"OpenFHE source directory not found: {openfhe_source_dir}")
+        print("Please ensure the OpenFHE submodule is initialized and at the correct path.")
+        sys.exit(1)
 
-    # print("\n--- HEonGPU CMake Install Step ---")
-    # print("IMPORTANT: The following 'sudo cmake --install' step is likely to cause issues.")
-    # print("It will prompt for a password and install system-wide.")
-    # print("Consider alternatives like local installation using CMAKE_INSTALL_PREFIX (see script comments).")
-    # user_confirmation = input("Do you want to proceed with 'sudo cmake --install'? (yes/NO): ")
+    # Create the build directory, similar to 'mkdir build' [cite: 35]
+    openfhe_build_dir.mkdir(exist_ok=True)
 
-    # if user_confirmation.lower() == 'yes':
-    #     try:
-    #         print(f"Running CMake install for HEonGPU: {' '.join(str(c) for c in cmake_install_cmd)}")
-    #         # Sudo commands cannot easily capture output in the same way without special handling.
-    #         # Also, check=True might behave unexpectedly if sudo itself fails due to password.
-    #         subprocess.run(cmake_install_cmd, env=env, check=True) 
-    #         print("HEonGPU CMake install command executed (check terminal for sudo prompts/errors).")
-    #     except subprocess.CalledProcessError as e:
-    #         print(f"HEonGPU CMake install failed with exit code {e.returncode}")
-    #         # Stderr/stdout might not be captured here due to sudo.
-    #         sys.exit(1)
-    #     except FileNotFoundError:
-    #         print("Error: 'sudo' command not found. Please ensure it's installed and in PATH or modify the install step.")
-    #         sys.exit(1)
-    # else:
-    #     print("Skipping 'sudo cmake --install' step for HEonGPU.")
-    #     print("Ensure your Python project can locate HEonGPU libraries and headers,")
-    #     print(f"possibly from the build directory: {heongpu_build_dir}")
+    # 2. CMake Configure step
+    # This command is equivalent to running 'cmake ..' from the build directory [cite: 37]
+    # We add -DCMAKE_INSTALL_PREFIX to install locally and avoid needing sudo 
+    cmake_configure_cmd = [
+        "cmake",
+        "..",
+        f"-DCMAKE_INSTALL_PREFIX={openfhe_install_dir}",
+        # You can add other CMake flags here, e.g., -DBUILD_EXAMPLES=OFF
+    ]
+    try:
+        print(f"Running CMake configure for OpenFHE: {' '.join(str(c) for c in cmake_configure_cmd)}")
+        print(f"Working directory: {openfhe_build_dir}")
+        process = subprocess.run(cmake_configure_cmd, cwd=str(openfhe_build_dir), env=env, check=True, capture_output=True, text=True)
+        if process.stdout:
+            print(f"OpenFHE CMake configure stdout:\n{process.stdout}")
+        if process.stderr:
+            print(f"OpenFHE CMake configure stderr:\n{process.stderr}")
+        print("OpenFHE CMake configuration successful.")
+    except subprocess.CalledProcessError as e:
+        print(f"OpenFHE CMake configure failed with exit code {e.returncode}")
+        if e.stdout:
+            print(f"OpenFHE CMake configure stdout:\n{e.stdout}")
+        if e.stderr:
+            print(f"OpenFHE CMake configure stderr:\n{e.stderr}")
+        sys.exit(1)
 
 
 # --- Main Build Function Called by Poetry ---
@@ -187,6 +183,7 @@ def build(setup_kwargs=None):
     # HEonGPU doesn't need GOARCH, CGO_ENABLED from Lattigo's specific env settings.
     # It will use the general os.environ copy, unless specific env vars are needed for CMake/CUDA.
     build_heongpu(root_dir, os.environ.copy())
+    build_openfhe(root_dir, os.environ.copy())
     print("\n=== All backend builds completed (or skipped if chosen) ===")
     
     # Return setup_kwargs for Poetry (important)
